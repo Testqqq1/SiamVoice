@@ -45,6 +45,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -56,6 +57,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -220,6 +224,45 @@ fun HomeScreen(
                 }
             }
 
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 1b. Gemini-app-style voices (Orbit, Pegasus, Vega ...) with preview
+            var showLiveVoiceSheet by remember { mutableStateOf(false) }
+            Text(
+                text = "เสียงแบบแอป Gemini (Gemini Voice)",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            val liveVoice = state.settings.liveVoice
+            OutlinedButton(
+                onClick = { showLiveVoiceSheet = true },
+                modifier = Modifier.fillMaxWidth().testTag("open_live_voice_picker")
+            ) {
+                Text(
+                    text = if (liveVoice != null) {
+                        "${liveVoice.displayName} • ${liveVoice.thaiLabel}"
+                    } else "ค่าเริ่มต้นของสไตล์ (แตะเพื่อเลือก Orbit, Vega, Orion ...)",
+                    fontSize = 13.sp
+                )
+            }
+            if (showLiveVoiceSheet) {
+                LiveVoicePickerSheet(
+                    selected = liveVoice,
+                    previewing = state.previewingVoice,
+                    previewBusy = state.isSynthesizing,
+                    previewMessage = state.previewMessage,
+                    onSelect = { viewModel.selectLiveVoice(it) },
+                    onPreview = { viewModel.previewLiveVoice(it) },
+                    onStopPreview = { viewModel.stop() },
+                    onDismiss = {
+                        viewModel.stop()
+                        showLiveVoiceSheet = false
+                    }
+                )
+            }
+
             Spacer(modifier = Modifier.height(14.dp))
 
             // 2. Voice Style / Personality (all-ages presets + 18+ presets behind a one-time age confirmation)
@@ -260,7 +303,9 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${state.settings.voicePreset.thaiTitle} • เสียง ${state.settings.voicePreset.voiceName}",
+                text = "${state.settings.voicePreset.thaiTitle} • เสียง " +
+                    (state.settings.liveVoice?.let { "${it.displayName} (≈ ${it.apiVoice})" }
+                        ?: state.settings.voicePreset.voiceName),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

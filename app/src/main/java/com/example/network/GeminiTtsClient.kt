@@ -10,6 +10,7 @@ import com.example.engine.AuthFailedException
 import com.example.engine.CloudModelUnavailableException
 import com.example.engine.InvalidAudioException
 import com.example.engine.QuotaExhaustedException
+import com.example.model.GeminiLiveVoice
 import com.example.model.VerifiedModelsStatus
 import com.example.model.VoiceStylePreset
 import kotlinx.coroutines.CancellationException
@@ -195,21 +196,8 @@ class GeminiTtsClient(
             MODEL_GEMINI_2_5_PRO_TTS
         )
 
-        val SUPPORTED_VOICES: Set<String> = setOf(
-            "Puck",
-            "Orus",
-            "Kore",
-            "Charon",
-            "Fenrir",
-            "Aoede",
-            "Zephyr",
-            "Leda",
-            // Voices suggested by the voice style presets (VoiceStylePreset)
-            "Algieba",
-            "Sulafat",
-            "Algenib",
-            "Enceladus"
-        )
+        /** All 30 documented Gemini API prebuilt voices (needed by the Gemini-app-style voice picker). */
+        val SUPPORTED_VOICES: Set<String> = GeminiLiveVoice.ALL_API_VOICES
 
         fun defaultHttpClient(): OkHttpClient {
             return OkHttpClient.Builder()
@@ -285,7 +273,7 @@ class GeminiTtsClient(
             stylePrompt: String
         ): String {
             val cleanText = text.trim()
-            val cleanStyle = stylePrompt.trim().ifEmpty {
+            val cleanStyle = stylePrompt.replace(VoiceStylePreset.VOICE_HINT_MARK, ". Voice: ").trim().ifEmpty {
                 VoiceStylePreset.FRIENDLY_COMPANION.stylePrompt
             }
             return """

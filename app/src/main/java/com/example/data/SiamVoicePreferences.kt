@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.model.GeminiLiveVoice
 import com.example.model.GeminiModelPreference
 import com.example.model.GeminiVoiceOption
 import com.example.model.PoliteEndingStyle
@@ -22,6 +23,8 @@ data class AppSettings(
     /** True once the user confirmed in the one-time dialog that they are 18 or older. Off by default. */
     val adultContentConfirmed: Boolean = false,
     /** Navigation mode: forces the clear Navigation style, low-latency path and navigation audio focus. */
+    /** Gemini-app-style voice (Orbit, Vega...) overriding the style's default voice; null = style default. */
+    val liveVoice: GeminiLiveVoice? = null,
     val navigationMode: Boolean = false,
     /** If Gemini audio is not ready within this budget, the Android system TTS speaks immediately. */
     val navigationLatencyBudgetMs: Long = 500L,
@@ -88,6 +91,7 @@ class SiamVoicePreferences(context: Context) {
             geminiVoice = resolvedVoice,
             politeEndingStyle = politeStyle,
             adultContentConfirmed = adultConfirmed,
+            liveVoice = GeminiLiveVoice.fromId(prefs.getString("gemini_live_voice", "")),
             navigationMode = prefs.getBoolean("navigation_mode", false),
             navigationLatencyBudgetMs = prefs.getLong("navigation_latency_budget_ms", 500L).coerceIn(100L, 3000L),
             navigationPoliteEnding = prefs.getBoolean("navigation_polite_ending", false),
@@ -129,6 +133,12 @@ class SiamVoicePreferences(context: Context) {
             .commit()
         _settingsFlow.value = loadSettings()
         return true
+    }
+
+    /** Persists the Gemini-app-style voice choice; null restores the default voice of the selected style. */
+    fun updateLiveVoice(voice: GeminiLiveVoice?) {
+        prefs.edit().putString("gemini_live_voice", voice?.name.orEmpty()).commit()
+        _settingsFlow.value = loadSettings()
     }
 
     fun updateNavigationMode(enabled: Boolean) {

@@ -211,11 +211,26 @@ enum class VoiceStylePreset(
          * its [stylePrompt] and falls back to a truncated copy of the given prompt for custom prompts.
          */
         fun geminiStyleFor(stylePrompt: String): String {
+            // A voice hint (see GeminiLiveVoice) is appended after VOICE_HINT_MARK
+            val markAt = stylePrompt.indexOf(VOICE_HINT_MARK)
+            if (markAt >= 0) {
+                val base = geminiStyleFor(stylePrompt.substring(0, markAt))
+                val hint = stylePrompt.substring(markAt + VOICE_HINT_MARK.length).trim()
+                return if (hint.isEmpty()) base else "$base, $hint".take(260)
+            }
             val trimmed = stylePrompt.trim()
             entries.firstOrNull { it.stylePrompt == trimmed }?.geminiStyle?.takeIf { it.isNotBlank() }
                 ?.let { return it }
             return trimmed.take(200)
         }
+
+        /** Separator between a preset's style prompt and the optional voice hint of a [GeminiLiveVoice]. */
+        const val VOICE_HINT_MARK = "\n#voice: "
+
+        /** Appends the voice hint of [voice] (if any) to [stylePrompt]. */
+        fun withVoiceHint(stylePrompt: String, voice: GeminiLiveVoice?): String =
+            if (voice == null || voice.styleHint.isBlank()) stylePrompt
+            else stylePrompt + VOICE_HINT_MARK + voice.styleHint
 
         fun fromVoiceOrName(value: String?): VoiceStylePreset {
             val v = value?.trim()
@@ -269,7 +284,11 @@ data class SynthesisRequestData(
     val speechRate: Float = 1.0f,
     val pitch: Float = 1.0f,
     /** True when the caller (e.g. a navigation app) asked for navigation-guidance audio. */
-    val navigationRequested: Boolean = false
+    val navigationRequested: Boolean = false,
+    /** Gemini-app-style voice chosen explicitly (e.g. for a preview). Null = use the saved setting. */
+    val liveVoice: GeminiLiveVoice? = null,
+    /** Preview of a voice: never treated as navigation, ignores the saved live voice when [liveVoice] is null. */
+    val previewOnly: Boolean = false
 )
 
 data class SynthesisResult(

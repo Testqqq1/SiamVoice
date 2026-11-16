@@ -9,6 +9,7 @@ import com.example.data.SecureApiKeyStore
 import com.example.data.AppSettings
 import com.example.data.SiamVoicePreferences
 import com.example.model.DiagnosticsInfo
+import com.example.model.GeminiLiveVoice
 import com.example.model.GeminiModelPreference
 import com.example.model.SynthesisRequestData
 import com.example.model.SynthesisResult
@@ -108,20 +109,38 @@ open class SiamVoiceTtsSynthesizer(
         val startTime: Long
     )
 
+    private fun resolveLiveVoice(request: SynthesisRequestData, settings: AppSettings): GeminiLiveVoice? =
+        request.liveVoice ?: if (request.previewOnly) null else settings.liveVoice
+
+    /**
+     * Replaces the style's default Gemini voice by the user's Gemini-app-style voice (Orbit, Vega, ...)
+     * and adds its short style hint. Not used for navigation mode.
+     */
+    private fun applyLiveVoice(request: SynthesisRequestData, settings: AppSettings): SynthesisRequestData {
+        val live = resolveLiveVoice(request, settings) ?: return request
+        return request.copy(
+            geminiVoice = live.apiVoice,
+            stylePrompt = VoiceStylePreset.withVoiceHint(request.stylePrompt, live)
+        )
+    }
+
     private class CloudOutcome(val result: SynthesisResult?, val error: Throwable?)
 
     private fun buildContext(request: SynthesisRequestData, settings: AppSettings): SynthContext {
         val startTime = System.currentTimeMillis()
-        val navigation = NavigationPolicy.isActive(settings.navigationMode, request.navigationRequested)
+        val navigation = !request.previewOnly &&
+            NavigationPolicy.isActive(settings.navigationMode, request.navigationRequested)
 
         // Navigation forces the clear Navigation style and ignores 18+ styles. Otherwise 18+ styles
         // require the one-time age confirmation and are downgraded to the default style without it.
         val req = if (navigation) {
             NavigationPolicy.applyNavigationStyle(request, settings)
         } else {
-            enforceAdultGate(request, settings.adultContentConfirmed)
+            applyLiveVoice(enforceAdultGate(request, settings.adultContentConfirmed), settings)
         }
         val preset = req.voicePreset
+        // The Gemini-app-style voice is part of the cache key (never in navigation mode, which is fixed)
+        val liveVoice = if (navigation) null else resolveLiveVoice(request, settings)
 
         // Process polite Thai ending once so Gemini and Android fallback receive identical transcripts.
         // 18+ presets (and navigation mode by default) switch the automatic "ครับ/ค่ะ" processor off.
@@ -143,7 +162,7 @@ open class SiamVoiceTtsSynthesizer(
             processedText = processedText,
             rate = effectiveRate,
             pitch = effectivePitch,
-            voiceStyleId = preset.name,
+            voiceStyleId = if (liveVoice != null) "${preset.name}+${liveVoice.name}" else preset.name,
             flashModelId = settings.verifiedFlashModelId.ifBlank { GeminiTtsClient.MODEL_FLASH },
             flashLiteModelId = settings.verifiedFlashLiteModelId.ifBlank { GeminiTtsClient.MODEL_FLASH_LITE },
             startTime = startTime
