@@ -108,6 +108,17 @@ enum class VoiceStylePreset(
         geminiStyle = "calm, polite, warm and composed, like a personal secretary",
         rewriteInstruction = "เขียนด้วยน้ำเสียงสุภาพ สุขุม ใจเย็น กระชับ"
     ),
+    NAVIGATION(
+        presetName = "Navigation",
+        thaiTitle = "เสียงนำทาง ชัดเจน (Navigation)",
+        voiceName = "Kore",
+        stylePrompt = "Speak like a clear, crisp navigation announcer: firm, calm and easy to hear in a noisy car, " +
+            "moderate speed, short sentences, never whisper. " +
+            "พูดชัดถ้อยชัดคำ หนักแน่น ใจเย็น ความเร็วปานกลาง ฟังง่ายในรถ ห้ามกระซิบ",
+        thaiDescription = "ชัด กระชับ ความเร็วปานกลาง สำหรับนำทาง",
+        geminiStyle = "clear, crisp and calm navigation announcer, moderate pace, never whisper",
+        rewriteInstruction = "เขียนให้สั้น กระชับ ชัดเจน บอกระยะทางและทิศทางก่อน ไม่ใช้คำฟุ่มเฟือย"
+    ),
     ROMANTIC(
         presetName = "Romantic",
         thaiTitle = "โรแมนติก หวานละมุน (Romantic)",
@@ -256,7 +267,9 @@ data class SynthesisRequestData(
     val geminiVoice: String = voicePreset.voiceName,
     val stylePrompt: String = voicePreset.stylePrompt,
     val speechRate: Float = 1.0f,
-    val pitch: Float = 1.0f
+    val pitch: Float = 1.0f,
+    /** True when the caller (e.g. a navigation app) asked for navigation-guidance audio. */
+    val navigationRequested: Boolean = false
 )
 
 data class SynthesisResult(

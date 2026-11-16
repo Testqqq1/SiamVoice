@@ -9,6 +9,7 @@ import android.util.Log
 import com.example.SiamVoiceApplication
 import com.example.data.SiamVoicePreferences
 import com.example.data.effectivePoliteEndingStyle
+import com.example.engine.NavigationPolicy
 import com.example.engine.SiamVoiceTtsSynthesizer
 import com.example.model.SynthesisRequestData
 import kotlinx.coroutines.CancellationException
@@ -84,7 +85,11 @@ open class SiamVoiceTtsService : TextToSpeechService() {
             geminiVoice = settings.geminiVoice,
             stylePrompt = settings.voicePreset.stylePrompt,
             speechRate = speechRate,
-            pitch = pitch
+            pitch = pitch,
+            // Calling nav apps (e.g. Google Maps) mark their audio as navigation guidance. The caller's
+            // own TextToSpeech client plays our PCM with its AudioAttributes/focus; we only use the hint
+            // to enable the low-latency navigation pipeline.
+            navigationRequested = NavigationPolicy.isNavigationRequest(request.params)
         )
 
         val job = serviceScope.launch {
@@ -134,6 +139,15 @@ open class SiamVoiceTtsService : TextToSpeechService() {
         currentSynthesisJob = job
         runBlocking {
             job.join()
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // Warm the Android TTS fallback so navigation prompts never wait for engine start-up
+        val app = application as? SiamVoiceApplication
+        if (app != null && customSynthesizer == null && app.preferences.getSettings().navigationMode) {
+            app.synthesizer.prewarmFallback()
         }
     }
 

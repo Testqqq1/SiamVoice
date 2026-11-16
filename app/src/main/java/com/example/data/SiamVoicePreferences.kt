@@ -21,6 +21,12 @@ data class AppSettings(
     val politeEndingStyle: PoliteEndingStyle = PoliteEndingStyle.AUTO_NATURAL,
     /** True once the user confirmed in the one-time dialog that they are 18 or older. Off by default. */
     val adultContentConfirmed: Boolean = false,
+    /** Navigation mode: forces the clear Navigation style, low-latency path and navigation audio focus. */
+    val navigationMode: Boolean = false,
+    /** If Gemini audio is not ready within this budget, the Android system TTS speaks immediately. */
+    val navigationLatencyBudgetMs: Long = 500L,
+    /** Navigation mode keeps ครับ/ค่ะ off (shorter) unless the user opts in. */
+    val navigationPoliteEnding: Boolean = false,
     val modelPreference: GeminiModelPreference = GeminiModelPreference.FLASH_PRIMARY,
     val verifiedFlashModelId: String = "gemini-3.8-flash-tts",
     val verifiedFlashLiteModelId: String = "gemini-3.8-flash-lite-tts"
@@ -82,6 +88,9 @@ class SiamVoicePreferences(context: Context) {
             geminiVoice = resolvedVoice,
             politeEndingStyle = politeStyle,
             adultContentConfirmed = adultConfirmed,
+            navigationMode = prefs.getBoolean("navigation_mode", false),
+            navigationLatencyBudgetMs = prefs.getLong("navigation_latency_budget_ms", 500L).coerceIn(100L, 3000L),
+            navigationPoliteEnding = prefs.getBoolean("navigation_polite_ending", false),
             modelPreference = modelPref,
             verifiedFlashModelId = verifiedFlash,
             verifiedFlashLiteModelId = verifiedFlashLite
@@ -120,6 +129,21 @@ class SiamVoicePreferences(context: Context) {
             .commit()
         _settingsFlow.value = loadSettings()
         return true
+    }
+
+    fun updateNavigationMode(enabled: Boolean) {
+        prefs.edit().putBoolean("navigation_mode", enabled).commit()
+        _settingsFlow.value = loadSettings()
+    }
+
+    fun updateNavigationLatencyBudget(ms: Long) {
+        prefs.edit().putLong("navigation_latency_budget_ms", ms.coerceIn(100L, 3000L)).commit()
+        _settingsFlow.value = loadSettings()
+    }
+
+    fun updateNavigationPoliteEnding(enabled: Boolean) {
+        prefs.edit().putBoolean("navigation_polite_ending", enabled).commit()
+        _settingsFlow.value = loadSettings()
     }
 
     /** Stores the one-time "I am 18 or older" confirmation that unlocks the 18+ presets. */

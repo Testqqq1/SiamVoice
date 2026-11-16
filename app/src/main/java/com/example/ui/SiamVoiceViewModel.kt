@@ -13,6 +13,7 @@ import com.example.data.AppSettings
 import com.example.data.SecureApiKeyStore
 import com.example.data.effectivePoliteEndingStyle
 import com.example.engine.DispatchEvent
+import com.example.engine.NavDownloadState
 import com.example.engine.SynthDispatcher
 import com.example.model.DiagnosticsInfo
 import com.example.model.ExternalEngineInfo
@@ -58,6 +59,7 @@ data class UiState(
     val apiKeyErrorMessage: String? = null,
     val verifiedModelsStatus: VerifiedModelsStatus = VerifiedModelsStatus(),
     // One-time 18+ age confirmation dialog; [pendingAdultPreset] is applied after the user confirms.
+    val navDownload: NavDownloadState = NavDownloadState(),
     val showAdultDialog: Boolean = false,
     val pendingAdultPreset: VoiceStylePreset? = null
 )
@@ -69,7 +71,7 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
     private val apiKeyStore: SecureApiKeyStore = app.apiKeyStore
     private val ttsManager: TextToSpeechManager = app.ttsManager
     private val synthDispatcher: SynthDispatcher = app.synthDispatcher
-    private val pcmPlayer = PcmPlayer()
+    private val pcmPlayer = PcmPlayer(application)
 
     private val _uiState = MutableStateFlow(
         UiState(
@@ -107,6 +109,11 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             synthesizer.diagnostics.collect { diag ->
                 _uiState.update { it.copy(diagnostics = diag) }
+            }
+        }
+        viewModelScope.launch {
+            synthesizer.navDownloadState.collect { download ->
+                _uiState.update { it.copy(navDownload = download) }
             }
         }
         viewModelScope.launch {
@@ -332,6 +339,41 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
         preferences.updateSpeechPitch(pitch)
     }
 
+    // --- Navigation mode ---
+
+    fun toggleNavigationMode(enabled: Boolean) {
+        preferences.updateNavigationMode(enabled)
+        if (enabled) synthesizer.prewarmFallback()
+    }
+
+    fun selectNavigationLatencyBudget(ms: Long) {
+        preferences.updateNavigationLatencyBudget(ms)
+    }
+
+    fun toggleNavigationPoliteEnding(enabled: Boolean) {
+        preferences.updateNavigationPoliteEnding(enabled)
+    }
+
+    fun downloadNavigationVoices() {
+        if (_uiState.value.navDownload.running) return
+        viewModelScope.launch {
+            try {
+                synthesizer.downloadNavigationVoices()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("SiamVoiceViewModel", "Navigation voice download failed: ${t.message}", t)
+                _uiState.update {
+                    it.copy(navDownload = it.navDownload.copy(running = false, message = "ดาวน์โหลดเสียงนำทางไม่สำเร็จ: ${t.localizedMessage}"))
+                }
+            }
+        }
+    }
+
+    fun clearNavigationVoices() {
+        synthesizer.clearNavigationVoices()
+    }
+
     fun clearCache() {
         synthesizer.clearCache()
         _uiState.update { it.copy(statusMessage = "ล้างแคชเสียงเรียบร้อยแล้ว") }
@@ -368,7 +410,8 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                     geminiVoice = currentSettings.geminiVoice,
                     stylePrompt = currentSettings.voicePreset.stylePrompt,
                     speechRate = currentSettings.fallbackSpeechRate,
-                    pitch = currentSettings.speechPitch
+                    pitch = currentSettings.speechPitch,
+                    navigationRequested = currentSettings.navigationMode
                 )
 
                 // Shared synthesis pipeline:
@@ -392,7 +435,12 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
 
-                pcmPlayer.play(result.audioData, result.sampleRate, result.channelCount)
+                pcmPlayer.play(
+                    result.audioData,
+                    result.sampleRate,
+                    result.channelCount,
+                    navigation = currentSettings.navigationMode
+                )
 
                 _uiState.update { it.copy(isPlaying = false) }
             } catch (e: CancellationException) {
