@@ -203,7 +203,12 @@ class GeminiTtsClient(
             "Fenrir",
             "Aoede",
             "Zephyr",
-            "Leda"
+            "Leda",
+            // Voices suggested by the voice style presets (VoiceStylePreset)
+            "Algieba",
+            "Sulafat",
+            "Algenib",
+            "Enceladus"
         )
 
         fun defaultHttpClient(): OkHttpClient {

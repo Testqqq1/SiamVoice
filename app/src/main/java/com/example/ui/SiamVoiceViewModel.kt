@@ -11,6 +11,7 @@ import com.example.SiamVoiceApplication
 import com.example.audio.PcmPlayer
 import com.example.data.AppSettings
 import com.example.data.SecureApiKeyStore
+import com.example.data.effectivePoliteEndingStyle
 import com.example.engine.DispatchEvent
 import com.example.engine.SynthDispatcher
 import com.example.model.DiagnosticsInfo
@@ -52,7 +53,10 @@ data class UiState(
     val isTestingConnection: Boolean = false,
     val apiKeyStatusMessage: String? = null,
     val apiKeyErrorMessage: String? = null,
-    val verifiedModelsStatus: VerifiedModelsStatus = VerifiedModelsStatus()
+    val verifiedModelsStatus: VerifiedModelsStatus = VerifiedModelsStatus(),
+    // One-time 18+ age confirmation dialog; [pendingAdultPreset] is applied after the user confirms.
+    val showAdultDialog: Boolean = false,
+    val pendingAdultPreset: VoiceStylePreset? = null
 )
 
 class SiamVoiceViewModel(application: Application) : AndroidViewModel(application) {
@@ -265,8 +269,36 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
 
     // --- Voice, Personality, Polite Ending & Model Preferences ---
 
+    /**
+     * Selects a voice style. 18+ styles show the one-time age confirmation first
+     * (see [confirmAdultContent]); they are never applied before the user confirms.
+     */
     fun selectVoicePreset(preset: VoiceStylePreset) {
-        preferences.updateVoicePreset(preset)
+        if (!preferences.updateVoicePreset(preset)) {
+            _uiState.update { it.copy(showAdultDialog = true, pendingAdultPreset = preset) }
+        }
+    }
+
+    /** Opens the age confirmation dialog from the settings switch (no style is selected yet). */
+    fun requestAdultContentUnlock() {
+        _uiState.update { it.copy(showAdultDialog = true, pendingAdultPreset = null) }
+    }
+
+    /** User tapped "I confirm I am 18 or older": remember it and apply the style they asked for. */
+    fun confirmAdultContent() {
+        val pending = _uiState.value.pendingAdultPreset
+        preferences.confirmAdultContent()
+        if (pending != null) preferences.updateVoicePreset(pending)
+        _uiState.update { it.copy(showAdultDialog = false, pendingAdultPreset = null) }
+    }
+
+    fun dismissAdultDialog() {
+        _uiState.update { it.copy(showAdultDialog = false, pendingAdultPreset = null) }
+    }
+
+    /** Turns the 18+ styles off again and forgets the age confirmation. */
+    fun revokeAdultContent() {
+        preferences.revokeAdultContent()
     }
 
     fun selectGeminiVoice(voice: String) {
@@ -327,7 +359,7 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                 val currentSettings = preferences.getSettings()
                 val request = SynthesisRequestData(
                     text = textToSpeak,
-                    politeStyle = currentSettings.politeEndingStyle,
+                    politeStyle = currentSettings.effectivePoliteEndingStyle,
                     voicePreset = currentSettings.voicePreset,
                     geminiVoice = currentSettings.geminiVoice,
                     stylePrompt = currentSettings.voicePreset.stylePrompt,

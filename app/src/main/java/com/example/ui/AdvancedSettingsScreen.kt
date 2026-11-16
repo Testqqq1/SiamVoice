@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.SecureApiKeyStore
 import com.example.model.GeminiModelPreference
+import com.example.model.VoiceStylePreset
 import com.example.ui.theme.EmeraldGreen
 import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.IndigoDark
@@ -89,6 +90,13 @@ fun AdvancedSettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    if (state.showAdultDialog) {
+        AdultContentDialog(
+            onConfirm = { viewModel.confirmAdultContent() },
+            onDismiss = { viewModel.dismissAdultDialog() }
+        )
+    }
 
     BackHandler {
         onNavigateBack()
@@ -376,6 +384,52 @@ fun AdvancedSettingsScreen(
                         value = state.verifiedModelsStatus.flashLiteModelId,
                         valueColor = SkyBlue
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Section: 18+ voice styles (off by default, one-time age confirmation)
+            SectionHeader(title = "สไตล์เสียง 18+ (Adult Voice Styles)")
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "เปิดใช้สไตล์เสียง 18+",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = VoiceStylePreset.adultPresets.joinToString(" • ") { it.presetName } +
+                                    "\nปิดอยู่เป็นค่าเริ่มต้น ต้องยืนยันว่าอายุ 18 ปีขึ้นไป " +
+                                    "และจะปิดคำลงท้าย ครับ/ค่ะ อัตโนมัติในสไตล์เหล่านี้",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = state.settings.adultContentConfirmed,
+                            onCheckedChange = { enabled ->
+                                if (enabled) viewModel.requestAdultContentUnlock() else viewModel.revokeAdultContent()
+                            },
+                            modifier = Modifier.testTag("adult_content_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = IndigoPrimary
+                            )
+                        )
+                    }
                 }
             }
 

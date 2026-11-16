@@ -19,10 +19,16 @@ data class AppSettings(
     val voicePreset: VoiceStylePreset = VoiceStylePreset.FRIENDLY_COMPANION,
     val geminiVoice: String = VoiceStylePreset.FRIENDLY_COMPANION.voiceName,
     val politeEndingStyle: PoliteEndingStyle = PoliteEndingStyle.AUTO_NATURAL,
+    /** True once the user confirmed in the one-time dialog that they are 18 or older. Off by default. */
+    val adultContentConfirmed: Boolean = false,
     val modelPreference: GeminiModelPreference = GeminiModelPreference.FLASH_PRIMARY,
     val verifiedFlashModelId: String = "gemini-3.8-flash-tts",
     val verifiedFlashLiteModelId: String = "gemini-3.8-flash-lite-tts"
 )
+
+/** Polite ending actually applied: 18+ presets override the user's choice (they switch it off). */
+val AppSettings.effectivePoliteEndingStyle: PoliteEndingStyle
+    get() = voicePreset.resolvePoliteEnding(politeEndingStyle)
 
 class SiamVoicePreferences(context: Context) {
     private val prefs: SharedPreferences =
@@ -31,17 +37,31 @@ class SiamVoicePreferences(context: Context) {
     private val _settingsFlow = MutableStateFlow(loadSettings())
     val settingsFlow: StateFlow<AppSettings> = _settingsFlow.asStateFlow()
 
+    companion object {
+        const val KEY_ADULT_CONFIRMED = "adult_content_confirmed"
+    }
+
     fun getSettings(): AppSettings = loadSettings()
 
     private fun loadSettings(): AppSettings {
         val styleName = prefs.getString("polite_style", PoliteEndingStyle.AUTO_NATURAL.name)
         val politeStyle = PoliteEndingStyle.fromStoredName(styleName)
 
-        val savedPresetName = prefs.getString("voice_preset", VoiceStylePreset.FRIENDLY_COMPANION.name)
-        val preset = VoiceStylePreset.fromVoiceOrName(savedPresetName)
+        val adultConfirmed = prefs.getBoolean(KEY_ADULT_CONFIRMED, false)
 
-        val savedVoiceName = prefs.getString("gemini_voice", preset.voiceName)
-        val voiceOption = GeminiVoiceOption.fromVoiceName(savedVoiceName)
+        val savedPresetName = prefs.getString("voice_preset", VoiceStylePreset.FRIENDLY_COMPANION.name)
+        // 18+ presets are never active without the age confirmation, even if stored in prefs.
+        val preset = VoiceStylePreset.gate(VoiceStylePreset.fromVoiceOrName(savedPresetName), adultConfirmed)
+
+        val savedVoiceName = prefs.getString("gemini_voice", preset.voiceName)?.trim()
+        // Accept the classic Puck/Orus choices and any (permitted) preset voice; otherwise use the preset's voice.
+        val resolvedVoice = GeminiVoiceOption.entries
+            .firstOrNull { it.voiceName.equals(savedVoiceName, ignoreCase = true) }?.voiceName
+            ?: VoiceStylePreset.entries
+                .firstOrNull {
+                    it.voiceName.equals(savedVoiceName, ignoreCase = true) && (!it.isAdult || adultConfirmed)
+                }?.voiceName
+            ?: preset.voiceName
 
         val modelPref = GeminiModelPreference.fromStoredName(
             prefs.getString("gemini_model_pref", GeminiModelPreference.FLASH_PRIMARY.name)
@@ -59,8 +79,9 @@ class SiamVoicePreferences(context: Context) {
             fallbackSpeechRate = prefs.getFloat("fallback_speech_rate", 1.0f).coerceIn(0.5f, 2.0f),
             speechPitch = prefs.getFloat("speech_pitch", 1.0f).coerceIn(0.5f, 2.0f),
             voicePreset = preset,
-            geminiVoice = voiceOption.voiceName,
+            geminiVoice = resolvedVoice,
             politeEndingStyle = politeStyle,
+            adultContentConfirmed = adultConfirmed,
             modelPreference = modelPref,
             verifiedFlashModelId = verifiedFlash,
             verifiedFlashLiteModelId = verifiedFlashLite
@@ -87,11 +108,34 @@ class SiamVoicePreferences(context: Context) {
         _settingsFlow.value = loadSettings()
     }
 
-    fun updateVoicePreset(preset: VoiceStylePreset) {
+    /**
+     * Selects a voice style preset. 18+ presets are rejected (returns false) until
+     * [confirmAdultContent] has been called.
+     */
+    fun updateVoicePreset(preset: VoiceStylePreset): Boolean {
+        if (preset.isAdult && !prefs.getBoolean(KEY_ADULT_CONFIRMED, false)) return false
         prefs.edit()
             .putString("voice_preset", preset.name)
             .putString("gemini_voice", preset.voiceName)
             .commit()
+        _settingsFlow.value = loadSettings()
+        return true
+    }
+
+    /** Stores the one-time "I am 18 or older" confirmation that unlocks the 18+ presets. */
+    fun confirmAdultContent() {
+        prefs.edit().putBoolean(KEY_ADULT_CONFIRMED, true).commit()
+        _settingsFlow.value = loadSettings()
+    }
+
+    /** Revokes the 18+ confirmation and resets any active 18+ preset to the default one. */
+    fun revokeAdultContent() {
+        val editor = prefs.edit().putBoolean(KEY_ADULT_CONFIRMED, false)
+        if (VoiceStylePreset.fromVoiceOrName(prefs.getString("voice_preset", null)).isAdult) {
+            editor.putString("voice_preset", VoiceStylePreset.FRIENDLY_COMPANION.name)
+                .putString("gemini_voice", VoiceStylePreset.FRIENDLY_COMPANION.voiceName)
+        }
+        editor.commit()
         _settingsFlow.value = loadSettings()
     }
 

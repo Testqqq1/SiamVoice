@@ -12,6 +12,7 @@ import com.example.model.GeminiModelPreference
 import com.example.model.SynthesisRequestData
 import com.example.model.SynthesisResult
 import com.example.model.TtsEngineType
+import com.example.model.VoiceStylePreset
 import com.example.network.GeminiTtsClient
 import com.example.processor.ThaiPoliteEndingProcessor
 import kotlinx.coroutines.CancellationException
@@ -87,10 +88,21 @@ open class SiamVoiceTtsSynthesizer(
         val startTime = System.currentTimeMillis()
         val settings = preferences.getSettings()
 
-        // 1. Process polite Thai ending once so Gemini and Android fallback receive identical transcripts
-        val processedText = ThaiPoliteEndingProcessor.process(request.text, request.politeStyle)
-        val effectiveRate = request.speechRate * settings.fallbackSpeechRate
-        val effectivePitch = request.pitch
+        // 0. 18+ styles require the one-time age confirmation; otherwise fall back to the default style.
+        val req = enforceAdultGate(request, settings.adultContentConfirmed)
+        val preset = req.voicePreset
+
+        // 1. Process polite Thai ending once so Gemini and Android fallback receive identical transcripts.
+        //    18+ presets switch the automatic "ครับ/ค่ะ" processor off.
+        val politeStyle = preset.resolvePoliteEnding(req.politeStyle)
+        val processedText = ThaiPoliteEndingProcessor.process(req.text, politeStyle)
+        // Style hints only apply to the Android fallback / cache key; presets without hints are unchanged.
+        val baseRate = req.speechRate * settings.fallbackSpeechRate
+        val effectiveRate = if (preset.speechRateHint == 1.0f) baseRate
+        else (baseRate * preset.speechRateHint).coerceIn(0.5f, 2.5f)
+        val effectivePitch = if (preset.pitchHint == 1.0f) req.pitch
+        else (req.pitch * preset.pitchHint).coerceIn(0.5f, 2.0f)
+        val voiceStyleId = preset.name
 
         val flashModelId = settings.verifiedFlashModelId.ifBlank { GeminiTtsClient.MODEL_FLASH }
         val flashLiteModelId = settings.verifiedFlashLiteModelId.ifBlank { GeminiTtsClient.MODEL_FLASH_LITE }
@@ -98,20 +110,22 @@ open class SiamVoiceTtsSynthesizer(
         // 2. Check Cache first (keyed by model, voice, stylePrompt, politeStyle, rate, pitch, processedText)
         val cached = voiceClipCache.get(
             modelName = flashModelId,
-            voiceName = request.geminiVoice,
+            voiceName = req.geminiVoice,
             text = processedText,
-            stylePrompt = request.stylePrompt,
-            politeStyle = request.politeStyle,
+            stylePrompt = req.stylePrompt,
+            politeStyle = politeStyle,
             speechRate = effectiveRate,
-            pitch = effectivePitch
+            pitch = effectivePitch,
+            voiceStyle = voiceStyleId
         ) ?: voiceClipCache.get(
             modelName = flashLiteModelId,
-            voiceName = request.geminiVoice,
+            voiceName = req.geminiVoice,
             text = processedText,
-            stylePrompt = request.stylePrompt,
-            politeStyle = request.politeStyle,
+            stylePrompt = req.stylePrompt,
+            politeStyle = politeStyle,
             speechRate = effectiveRate,
-            pitch = effectivePitch
+            pitch = effectivePitch,
+            voiceStyle = voiceStyleId
         )
 
         if (cached != null) {
@@ -125,8 +139,8 @@ open class SiamVoiceTtsSynthesizer(
             return@withContext cached.copy(
                 latencyMs = totalLatency,
                 processedText = processedText,
-                voiceName = request.geminiVoice,
-                stylePrompt = request.stylePrompt
+                voiceName = req.geminiVoice,
+                stylePrompt = req.stylePrompt
             )
         }
 
@@ -157,8 +171,8 @@ open class SiamVoiceTtsSynthesizer(
                     val pcmAudio = geminiClient.synthesize(
                         text = processedText,
                         modelId = stage.modelId,
-                        voiceName = request.geminiVoice,
-                        stylePrompt = request.stylePrompt
+                        voiceName = req.geminiVoice,
+                        stylePrompt = req.stylePrompt
                     )
                     if (pcmAudio.pcmData.isEmpty()) {
                         throw InvalidAudioException("${stage.engineType.displayName} returned empty PCM audio")
@@ -173,18 +187,19 @@ open class SiamVoiceTtsSynthesizer(
                         latencyMs = totalLatency,
                         wasCached = false,
                         processedText = processedText,
-                        voiceName = request.geminiVoice,
-                        stylePrompt = request.stylePrompt
+                        voiceName = req.geminiVoice,
+                        stylePrompt = req.stylePrompt
                     )
                     voiceClipCache.put(
                         modelName = stage.modelId,
-                        voiceName = request.geminiVoice,
+                        voiceName = req.geminiVoice,
                         text = processedText,
                         result = result,
-                        stylePrompt = request.stylePrompt,
-                        politeStyle = request.politeStyle,
+                        stylePrompt = req.stylePrompt,
+                        politeStyle = politeStyle,
                         speechRate = effectiveRate,
-                        pitch = effectivePitch
+                        pitch = effectivePitch,
+                        voiceStyle = voiceStyleId
                     )
                     updateDiagnostics(stage.engineType, totalLatency, processedText, lastError = null)
                     return@withContext result
@@ -222,8 +237,8 @@ open class SiamVoiceTtsSynthesizer(
                     latencyMs = totalLatency,
                     wasCached = false,
                     processedText = processedText,
-                    voiceName = request.geminiVoice,
-                    stylePrompt = request.stylePrompt
+                    voiceName = req.geminiVoice,
+                    stylePrompt = req.stylePrompt
                 )
                 updateDiagnostics(
                     engine = TtsEngineType.ANDROID_SYSTEM_TTS,
@@ -259,6 +274,20 @@ open class SiamVoiceTtsSynthesizer(
                 "Gemini TTS ล้มเหลว ($cloudReason) และปิดระบบสำรอง Android TTS ไว้"
             )
         }
+    }
+
+    /**
+     * Defence in depth: even if a caller hands us an 18+ preset, it is only honoured when the user
+     * confirmed they are 18 or older. Otherwise the request is downgraded to the default style.
+     */
+    internal fun enforceAdultGate(request: SynthesisRequestData, adultConfirmed: Boolean): SynthesisRequestData {
+        if (!request.voicePreset.isAdult || adultConfirmed) return request
+        val safe = VoiceStylePreset.FRIENDLY_COMPANION
+        return request.copy(
+            voicePreset = safe,
+            geminiVoice = safe.voiceName,
+            stylePrompt = safe.stylePrompt
+        )
     }
 
     private fun updateDiagnostics(

@@ -86,6 +86,13 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
+    if (state.showAdultDialog) {
+        AdultContentDialog(
+            onConfirm = { viewModel.confirmAdultContent() },
+            onDismiss = { viewModel.dismissAdultDialog() }
+        )
+    }
+
     val quickPhrases = listOf(
         "อีก 300 เมตร เลี้ยวซ้าย",
         "ถึงจุดหมายแล้ว",
@@ -215,9 +222,9 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // 2. Voice Personality (Friendly Companion / Calm Personal Assistant)
+            // 2. Voice Style / Personality (all-ages presets + 18+ presets behind a one-time age confirmation)
             Text(
-                text = "บุคลิกน้ำเสียง (Voice Personality)",
+                text = "สไตล์การตอบและโทนเสียง (Voice Style)",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -232,13 +239,14 @@ fun HomeScreen(
             ) {
                 VoiceStylePreset.entries.forEach { preset ->
                     val isSelected = state.settings.voicePreset == preset
+                    val isLocked = preset.isAdult && !state.settings.adultContentConfirmed
                     FilterChip(
                         selected = isSelected,
                         onClick = { viewModel.selectVoicePreset(preset) },
-                        modifier = Modifier.testTag("preset_${preset.voiceName.lowercase()}"),
+                        modifier = Modifier.testTag("preset_${preset.name.lowercase()}"),
                         label = {
                             Text(
-                                text = "${preset.presetName} (${preset.voiceName})",
+                                text = if (isLocked) "🔒 ${preset.presetName}" else preset.presetName,
                                 fontSize = 12.sp
                             )
                         },
@@ -252,7 +260,13 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = state.settings.voicePreset.stylePrompt,
+                text = "${state.settings.voicePreset.thaiTitle} • เสียง ${state.settings.voicePreset.voiceName}",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = state.settings.voicePreset.thaiDescription.ifBlank { state.settings.voicePreset.stylePrompt },
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -266,6 +280,15 @@ fun HomeScreen(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            val politeOverride = state.settings.voicePreset.politeEndingOverride
+            if (politeOverride != null) {
+                Text(
+                    text = "สไตล์ ${state.settings.voicePreset.presetName} ปิดคำลงท้าย ครับ/ค่ะ อัตโนมัติ",
+                    fontSize = 11.sp,
+                    color = GoldAccent,
+                    modifier = Modifier.testTag("polite_override_note")
+                )
+            }
             Spacer(modifier = Modifier.height(6.dp))
 
             Row(
@@ -275,9 +298,10 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 PoliteEndingStyle.entries.forEach { style ->
-                    val isSelected = state.settings.politeEndingStyle == style
+                    val isSelected = (politeOverride ?: state.settings.politeEndingStyle) == style
                     FilterChip(
                         selected = isSelected,
+                        enabled = politeOverride == null,
                         onClick = { viewModel.selectPoliteStyle(style) },
                         modifier = Modifier.testTag("polite_${style.name.lowercase()}"),
                         label = { Text(style.label, fontSize = 12.sp) },

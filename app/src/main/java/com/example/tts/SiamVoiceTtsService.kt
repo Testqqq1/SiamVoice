@@ -8,6 +8,7 @@ import android.speech.tts.TextToSpeechService
 import android.util.Log
 import com.example.SiamVoiceApplication
 import com.example.data.SiamVoicePreferences
+import com.example.data.effectivePoliteEndingStyle
 import com.example.engine.SiamVoiceTtsSynthesizer
 import com.example.model.SynthesisRequestData
 import kotlinx.coroutines.CancellationException
@@ -78,7 +79,7 @@ open class SiamVoiceTtsService : TextToSpeechService() {
 
         val synthesisRequestData = SynthesisRequestData(
             text = text,
-            politeStyle = settings.politeEndingStyle,
+            politeStyle = settings.effectivePoliteEndingStyle,
             voicePreset = settings.voicePreset,
             geminiVoice = settings.geminiVoice,
             stylePrompt = settings.voicePreset.stylePrompt,

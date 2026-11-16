@@ -24,7 +24,8 @@ class VoiceClipCache(context: Context) {
         stylePrompt: String = VoiceStylePreset.fromVoiceOrName(voiceName).stylePrompt,
         politeStyle: PoliteEndingStyle = PoliteEndingStyle.MALE_DEFAULT,
         speechRate: Float = 1.0f,
-        pitch: Float = 1.0f
+        pitch: Float = 1.0f,
+        voiceStyle: String = ""
     ): SynthesisResult? {
         val key = computeKey(
             model = modelName,
@@ -33,7 +34,8 @@ class VoiceClipCache(context: Context) {
             politeStyle = politeStyle,
             speechRate = speechRate,
             pitch = pitch,
-            text = text
+            text = text,
+            voiceStyle = voiceStyle
         )
         // 1. Check memory cache
         memoryCache.get(key)?.let {
@@ -83,7 +85,8 @@ class VoiceClipCache(context: Context) {
         stylePrompt: String = result.stylePrompt.ifBlank { VoiceStylePreset.fromVoiceOrName(voiceName).stylePrompt },
         politeStyle: PoliteEndingStyle = PoliteEndingStyle.MALE_DEFAULT,
         speechRate: Float = 1.0f,
-        pitch: Float = 1.0f
+        pitch: Float = 1.0f,
+        voiceStyle: String = ""
     ) {
         val key = computeKey(
             model = modelName,
@@ -92,7 +95,8 @@ class VoiceClipCache(context: Context) {
             politeStyle = politeStyle,
             speechRate = speechRate,
             pitch = pitch,
-            text = text
+            text = text,
+            voiceStyle = voiceStyle
         )
         memoryCache.put(key, result)
 
@@ -124,6 +128,11 @@ class VoiceClipCache(context: Context) {
         cacheDir.listFiles()?.forEach { it.delete() }
     }
 
+    /**
+     * Cache key over everything that changes the audio. [voiceStyle] is the id of the
+     * [VoiceStylePreset] (e.g. `SEXY`) so clips rendered in different styles never mix, even if two
+     * presets would share a voice or prompt text.
+     */
     fun computeKey(
         model: String,
         voice: String,
@@ -131,11 +140,12 @@ class VoiceClipCache(context: Context) {
         politeStyle: PoliteEndingStyle = PoliteEndingStyle.MALE_DEFAULT,
         speechRate: Float = 1.0f,
         pitch: Float = 1.0f,
-        text: String
+        text: String,
+        voiceStyle: String = ""
     ): String {
         val rateFormatted = String.format(Locale.US, "%.2f", speechRate)
         val pitchFormatted = String.format(Locale.US, "%.2f", pitch)
-        val input = "$model|$voice|$stylePrompt|${politeStyle.name}|$rateFormatted|$pitchFormatted|$text"
+        val input = "$model|$voice|$stylePrompt|${politeStyle.name}|$rateFormatted|$pitchFormatted|$voiceStyle|$text"
         val md = MessageDigest.getInstance("SHA-256")
         val bytes = md.digest(input.toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it) }
