@@ -10,9 +10,11 @@ import com.example.audio.DecodedPcmAudio
 import com.example.model.ExternalEngineInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.resume
@@ -119,13 +121,30 @@ open class AndroidSystemTtsEngine(private val context: Context) {
         preferredEnginePackage: String? = null,
         speechRate: Float = 1.0f,
         pitch: Float = 1.0f,
-        timeoutMs: Long = 6000L
+        timeoutMs: Long = 20_000L
     ): DecodedPcmAudio = withContext(Dispatchers.IO) {
-        withTimeout(timeoutMs) {
+        try {
+            synthesizeWithinTimeout(text, preferredEnginePackage, speechRate, pitch, timeoutMs)
+        } catch (e: TimeoutCancellationException) {
+            // TimeoutCancellationException is a CancellationException: convert it so callers report an
+            // error instead of silently treating the request as cancelled.
+            throw FallbackSynthesisException(
+                "Android TTS ใช้เวลานานเกินไป (${timeoutMs / 1000} วินาที) - ลองเปิดแอป Speech Services by Google แล้วดาวน์โหลดเสียงภาษาไทย"
+            )
+        }
+    }
+
+    private suspend fun synthesizeWithinTimeout(
+        text: String,
+        preferredEnginePackage: String?,
+        speechRate: Float,
+        pitch: Float,
+        timeoutMs: Long
+    ): DecodedPcmAudio = withTimeout(timeoutMs) {
             val availableEngines = discoverExternalEngines()
             val candidatePackages = orderCandidateExternalEngines(availableEngines, preferredEnginePackage)
             if (candidatePackages.isEmpty()) {
-                throw NoCompatibleEngineException("No external Android TTS engine installed on this device.")
+                throw NoCompatibleEngineException("ไม่พบเอนจินเสียง Android ภายนอกในเครื่อง (ติดตั้ง Speech Services by Google)")
             }
 
             var lastError: Throwable? = null
@@ -157,10 +176,55 @@ open class AndroidSystemTtsEngine(private val context: Context) {
                 is LanguageNotSupportedException -> throw err
                 is NoCompatibleEngineException -> throw err
                 else -> throw FallbackSynthesisException(
-                    err?.message ?: "All external Android TTS engines failed to synthesize Thai speech."
+                    err?.message ?: "เอนจิน Android TTS ทั้งหมดสังเคราะห์เสียงไทยไม่สำเร็จ"
                 )
             }
+    }
+
+    // Warm engine pool: creating a TextToSpeech instance takes hundreds of milliseconds (more on the
+    // first call), which matters for the navigation latency budget. Instances are reused.
+    private val pool = HashMap<String, TextToSpeech>()
+
+    @Synchronized
+    private fun pooled(pkg: String): TextToSpeech? = pool[pkg]
+
+    @Synchronized
+    private fun drop(pkg: String, tts: TextToSpeech?) {
+        if (pool[pkg] === tts) pool.remove(pkg)
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (ignored: Exception) {}
+    }
+
+    /** Pre-initializes the preferred (or best candidate) engine so the first fallback is instant. */
+    open suspend fun prewarm(preferredEnginePackage: String? = null) = withContext(Dispatchers.IO) {
+        val pkg = orderCandidateExternalEngines(discoverExternalEngines(), preferredEnginePackage).firstOrNull()
+            ?: return@withContext
+        if (pooled(pkg) != null) return@withContext
+        withTimeoutOrNull(10_000L) {
+            suspendCancellableCoroutine<Unit> { cont ->
+                var created: TextToSpeech? = null
+                created = TextToSpeech(context, { status ->
+                    if (status == TextToSpeech.SUCCESS && created != null) {
+                        synchronized(this@AndroidSystemTtsEngine) { pool[pkg] = created!! }
+                    } else {
+                        try { created?.shutdown() } catch (ignored: Exception) {}
+                    }
+                    if (cont.isActive) cont.resume(Unit)
+                }, pkg)
+            }
         }
+        Unit
+    }
+
+    /** Releases pooled engines (call when the app/service goes away). */
+    @Synchronized
+    open fun release() {
+        pool.values.forEach {
+            try { it.stop(); it.shutdown() } catch (ignored: Exception) {}
+        }
+        pool.clear()
     }
 
     protected open suspend fun synthesizeWithEngine(
@@ -169,51 +233,37 @@ open class AndroidSystemTtsEngine(private val context: Context) {
         speechRate: Float,
         pitch: Float
     ): DecodedPcmAudio = suspendCancellableCoroutine { continuation ->
-        var ttsInstance: TextToSpeech? = null
         var tempFile: File? = null
+        var current: TextToSpeech? = null
 
-        val cleanup = {
+        val cleanup = { discard: Boolean ->
             try {
                 tempFile?.delete()
-                ttsInstance?.stop()
-                ttsInstance?.shutdown()
+                if (discard) drop(enginePackage, current)
             } catch (ignored: Exception) {}
         }
 
-        continuation.invokeOnCancellation {
-            cleanup()
+        fun fail(error: Throwable, discardEngine: Boolean) {
+            cleanup(discardEngine)
+            if (continuation.isActive) continuation.resumeWithException(error)
         }
 
-        ttsInstance = TextToSpeech(context, { status ->
-            if (status != TextToSpeech.SUCCESS) {
-                cleanup()
-                if (continuation.isActive) {
-                    continuation.resumeWithException(
-                        FallbackSynthesisException("Failed to initialize engine $enginePackage (status=$status)")
-                    )
-                }
-                return@TextToSpeech
-            }
-
+        fun runUtterance(tts: TextToSpeech) {
+            current = tts
             try {
-                val tts = ttsInstance ?: return@TextToSpeech
-
                 // Verify Thai support (th-TH or th)
                 var langResult = tts.setLanguage(THAI_LOCALE)
                 if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
                     langResult = tts.setLanguage(THAI_FALLBACK_LOCALE)
                 }
-
                 if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    cleanup()
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(
-                            LanguageNotSupportedException(
-                                "Selected engine ($enginePackage) does not support Thai (th-TH)."
-                            )
-                        )
-                    }
-                    return@TextToSpeech
+                    fail(
+                        LanguageNotSupportedException(
+                            "เอนจิน $enginePackage ไม่รองรับภาษาไทย (th-TH) หรือยังไม่ได้ดาวน์โหลดเสียงภาษาไทย"
+                        ),
+                        true
+                    )
+                    return
                 }
 
                 tts.setSpeechRate(speechRate.coerceIn(0.5f, 2.0f))
@@ -226,75 +276,65 @@ open class AndroidSystemTtsEngine(private val context: Context) {
                     override fun onStart(id: String?) {}
 
                     override fun onDone(id: String?) {
-                        if (id == utteranceId) {
-                            try {
-                                val fileBytes = tempFile?.readBytes() ?: ByteArray(0)
-                                if (fileBytes.isEmpty()) {
-                                    cleanup()
-                                    if (continuation.isActive) {
-                                        continuation.resumeWithException(
-                                            FallbackSynthesisException("Fallback engine produced 0 bytes.")
-                                        )
-                                    }
-                                    return
-                                }
-
-                                val decoded = AudioDecoder.decodeToPcm(fileBytes, context.cacheDir, 24000)
-                                cleanup()
-                                if (continuation.isActive) {
-                                    continuation.resume(decoded)
-                                }
-                            } catch (e: Exception) {
-                                cleanup()
-                                if (continuation.isActive) {
-                                    continuation.resumeWithException(
-                                        FallbackSynthesisException("Error reading fallback audio: ${e.message}")
-                                    )
-                                }
+                        if (id != utteranceId) return
+                        try {
+                            val fileBytes = tempFile?.readBytes() ?: ByteArray(0)
+                            if (fileBytes.isEmpty()) {
+                                fail(FallbackSynthesisException("Fallback engine produced 0 bytes."), true)
+                                return
                             }
+                            val decoded = AudioDecoder.decodeToPcm(fileBytes, context.cacheDir, 24000)
+                            cleanup(false) // keep the warm engine for the next request
+                            if (continuation.isActive) continuation.resume(decoded)
+                        } catch (e: Exception) {
+                            fail(FallbackSynthesisException("Error reading fallback audio: ${e.message}"), true)
                         }
                     }
 
                     @Deprecated("Deprecated in Java")
                     override fun onError(id: String?) {
                         if (id == utteranceId) {
-                            cleanup()
-                            if (continuation.isActive) {
-                                continuation.resumeWithException(
-                                    FallbackSynthesisException("Engine $enginePackage reported synthesis error.")
-                                )
-                            }
+                            fail(FallbackSynthesisException("Engine $enginePackage reported synthesis error."), true)
                         }
                     }
 
                     override fun onError(id: String?, errorCode: Int) {
                         if (id == utteranceId) {
-                            cleanup()
-                            if (continuation.isActive) {
-                                continuation.resumeWithException(
-                                    FallbackSynthesisException("Engine $enginePackage error code: $errorCode")
-                                )
-                            }
+                            fail(FallbackSynthesisException("Engine $enginePackage error code: $errorCode"), true)
                         }
                     }
                 })
 
-                val params = Bundle()
-                val ret = tts.synthesizeToFile(text, params, tempFile!!, utteranceId)
+                val ret = tts.synthesizeToFile(text, Bundle(), tempFile!!, utteranceId)
                 if (ret != TextToSpeech.SUCCESS) {
-                    cleanup()
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(
-                            FallbackSynthesisException("synthesizeToFile returned code $ret")
-                        )
-                    }
+                    fail(FallbackSynthesisException("synthesizeToFile returned code $ret"), true)
                 }
             } catch (e: Exception) {
-                cleanup()
-                if (continuation.isActive) {
-                    continuation.resumeWithException(e)
-                }
+                fail(e, true)
             }
-        }, enginePackage)
+        }
+
+        continuation.invokeOnCancellation {
+            // Cancelled mid-utterance (timeout or stop): the engine may be stuck, so don't keep it warm
+            cleanup(true)
+        }
+
+        val warm = pooled(enginePackage)
+        if (warm != null) {
+            runUtterance(warm)
+        } else {
+            var created: TextToSpeech? = null
+            created = TextToSpeech(context, { status ->
+                val tts = created
+                if (status != TextToSpeech.SUCCESS || tts == null) {
+                    current = tts
+                    fail(FallbackSynthesisException("Failed to initialize engine $enginePackage (status=$status)"), true)
+                } else {
+                    synchronized(this@AndroidSystemTtsEngine) { pool[enginePackage] = tts }
+                    runUtterance(tts)
+                }
+            }, enginePackage)
+            current = created
+        }
     }
 }

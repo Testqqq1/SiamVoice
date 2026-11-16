@@ -11,14 +11,18 @@ import com.example.SiamVoiceApplication
 import com.example.audio.PcmPlayer
 import com.example.data.AppSettings
 import com.example.data.SecureApiKeyStore
+import com.example.data.effectivePoliteEndingStyle
 import com.example.engine.DispatchEvent
+import com.example.engine.NavDownloadState
 import com.example.engine.SynthDispatcher
 import com.example.model.DiagnosticsInfo
 import com.example.model.ExternalEngineInfo
+import com.example.model.GeminiLiveVoice
 import com.example.model.GeminiModelPreference
 import com.example.model.PoliteEndingStyle
 import com.example.model.SynthesisRequestData
 import com.example.model.SynthesisResult
+import com.example.model.TtsEngineType
 import com.example.model.VerifiedModelsStatus
 import com.example.model.VoiceStylePreset
 import com.example.network.GeminiTtsClient
@@ -39,6 +43,8 @@ data class UiState(
     val lastResult: SynthesisResult? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
+    // Non-fatal Thai notice, e.g. Gemini failed and Android TTS was used instead
+    val noticeMessage: String? = null,
     val settings: AppSettings = AppSettings(),
     val diagnostics: DiagnosticsInfo = DiagnosticsInfo(),
     val availableEngines: List<ExternalEngineInfo> = emptyList(),
@@ -52,7 +58,14 @@ data class UiState(
     val isTestingConnection: Boolean = false,
     val apiKeyStatusMessage: String? = null,
     val apiKeyErrorMessage: String? = null,
-    val verifiedModelsStatus: VerifiedModelsStatus = VerifiedModelsStatus()
+    val verifiedModelsStatus: VerifiedModelsStatus = VerifiedModelsStatus(),
+    // One-time 18+ age confirmation dialog; [pendingAdultPreset] is applied after the user confirms.
+    val navDownload: NavDownloadState = NavDownloadState(),
+    /** Gemini-app-style voice whose sample is being synthesized/played in the picker, if any. */
+    val previewingVoice: GeminiLiveVoice? = null,
+    val previewMessage: String? = null,
+    val showAdultDialog: Boolean = false,
+    val pendingAdultPreset: VoiceStylePreset? = null
 )
 
 class SiamVoiceViewModel(application: Application) : AndroidViewModel(application) {
@@ -62,7 +75,7 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
     private val apiKeyStore: SecureApiKeyStore = app.apiKeyStore
     private val ttsManager: TextToSpeechManager = app.ttsManager
     private val synthDispatcher: SynthDispatcher = app.synthDispatcher
-    private val pcmPlayer = PcmPlayer()
+    private val pcmPlayer = PcmPlayer(application)
 
     private val _uiState = MutableStateFlow(
         UiState(
@@ -100,6 +113,11 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             synthesizer.diagnostics.collect { diag ->
                 _uiState.update { it.copy(diagnostics = diag) }
+            }
+        }
+        viewModelScope.launch {
+            synthesizer.navDownloadState.collect { download ->
+                _uiState.update { it.copy(navDownload = download) }
             }
         }
         viewModelScope.launch {
@@ -265,8 +283,36 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
 
     // --- Voice, Personality, Polite Ending & Model Preferences ---
 
+    /**
+     * Selects a voice style. 18+ styles show the one-time age confirmation first
+     * (see [confirmAdultContent]); they are never applied before the user confirms.
+     */
     fun selectVoicePreset(preset: VoiceStylePreset) {
-        preferences.updateVoicePreset(preset)
+        if (!preferences.updateVoicePreset(preset)) {
+            _uiState.update { it.copy(showAdultDialog = true, pendingAdultPreset = preset) }
+        }
+    }
+
+    /** Opens the age confirmation dialog from the settings switch (no style is selected yet). */
+    fun requestAdultContentUnlock() {
+        _uiState.update { it.copy(showAdultDialog = true, pendingAdultPreset = null) }
+    }
+
+    /** User tapped "I confirm I am 18 or older": remember it and apply the style they asked for. */
+    fun confirmAdultContent() {
+        val pending = _uiState.value.pendingAdultPreset
+        preferences.confirmAdultContent()
+        if (pending != null) preferences.updateVoicePreset(pending)
+        _uiState.update { it.copy(showAdultDialog = false, pendingAdultPreset = null) }
+    }
+
+    fun dismissAdultDialog() {
+        _uiState.update { it.copy(showAdultDialog = false, pendingAdultPreset = null) }
+    }
+
+    /** Turns the 18+ styles off again and forgets the age confirmation. */
+    fun revokeAdultContent() {
+        preferences.revokeAdultContent()
     }
 
     fun selectGeminiVoice(voice: String) {
@@ -297,6 +343,90 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
         preferences.updateSpeechPitch(pitch)
     }
 
+    // --- Gemini-app-style voice picker ---
+
+    /** Saves the chosen voice (null = default voice of the selected style). */
+    fun selectLiveVoice(voice: GeminiLiveVoice?) {
+        preferences.updateLiveVoice(voice)
+    }
+
+    /** Plays a short sample of [voice] (always normal audio, never navigation mode). */
+    fun previewLiveVoice(voice: GeminiLiveVoice) {
+        stop()
+        activePlaybackJob = viewModelScope.launch {
+            _uiState.update { it.copy(previewingVoice = voice, previewMessage = null, isSynthesizing = true) }
+            try {
+                val settings = preferences.getSettings()
+                val request = SynthesisRequestData(
+                    text = PREVIEW_SAMPLE_TEXT,
+                    politeStyle = PoliteEndingStyle.OFF,
+                    voicePreset = settings.voicePreset,
+                    geminiVoice = settings.geminiVoice,
+                    stylePrompt = settings.voicePreset.stylePrompt,
+                    speechRate = settings.fallbackSpeechRate,
+                    pitch = settings.speechPitch,
+                    liveVoice = voice,
+                    previewOnly = true
+                )
+                val result = synthesizer.synthesize(request)
+                val note = if (result.engineUsed == TtsEngineType.ANDROID_SYSTEM_TTS) {
+                    "เสียงตัวอย่างนี้เป็น Android TTS สำรอง (Gemini ใช้ไม่ได้) จึงไม่ใช่โทนเสียง ${voice.displayName} จริง"
+                } else null
+                _uiState.update { it.copy(isSynthesizing = false, isPlaying = true, previewMessage = note) }
+                pcmPlayer.play(result.audioData, result.sampleRate, result.channelCount, navigation = false)
+                _uiState.update { it.copy(isPlaying = false, previewingVoice = null) }
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isSynthesizing = false, isPlaying = false, previewingVoice = null) }
+                throw e
+            } catch (t: Throwable) {
+                Log.e("SiamVoiceViewModel", "Voice preview error: ${t.message}", t)
+                _uiState.update {
+                    it.copy(
+                        isSynthesizing = false,
+                        isPlaying = false,
+                        previewingVoice = null,
+                        previewMessage = "เล่นเสียงตัวอย่างไม่ได้: ${t.localizedMessage ?: "ไม่ทราบสาเหตุ"}"
+                    )
+                }
+            }
+        }
+    }
+
+    // --- Navigation mode ---
+
+    fun toggleNavigationMode(enabled: Boolean) {
+        preferences.updateNavigationMode(enabled)
+        if (enabled) synthesizer.prewarmFallback()
+    }
+
+    fun selectNavigationLatencyBudget(ms: Long) {
+        preferences.updateNavigationLatencyBudget(ms)
+    }
+
+    fun toggleNavigationPoliteEnding(enabled: Boolean) {
+        preferences.updateNavigationPoliteEnding(enabled)
+    }
+
+    fun downloadNavigationVoices() {
+        if (_uiState.value.navDownload.running) return
+        viewModelScope.launch {
+            try {
+                synthesizer.downloadNavigationVoices()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("SiamVoiceViewModel", "Navigation voice download failed: ${t.message}", t)
+                _uiState.update {
+                    it.copy(navDownload = it.navDownload.copy(running = false, message = "ดาวน์โหลดเสียงนำทางไม่สำเร็จ: ${t.localizedMessage}"))
+                }
+            }
+        }
+    }
+
+    fun clearNavigationVoices() {
+        synthesizer.clearNavigationVoices()
+    }
+
     fun clearCache() {
         synthesizer.clearCache()
         _uiState.update { it.copy(statusMessage = "ล้างแคชเสียงเรียบร้อยแล้ว") }
@@ -320,6 +450,7 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                 it.copy(
                     isSynthesizing = true,
                     errorMessage = null,
+                    noticeMessage = null,
                     statusMessage = "กำลังสังเคราะห์เสียง..."
                 )
             }
@@ -327,32 +458,47 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                 val currentSettings = preferences.getSettings()
                 val request = SynthesisRequestData(
                     text = textToSpeak,
-                    politeStyle = currentSettings.politeEndingStyle,
+                    politeStyle = currentSettings.effectivePoliteEndingStyle,
                     voicePreset = currentSettings.voicePreset,
                     geminiVoice = currentSettings.geminiVoice,
                     stylePrompt = currentSettings.voicePreset.stylePrompt,
                     speechRate = currentSettings.fallbackSpeechRate,
-                    pitch = currentSettings.speechPitch
+                    pitch = currentSettings.speechPitch,
+                    navigationRequested = currentSettings.navigationMode
                 )
 
                 // Shared synthesis pipeline:
                 // 1. Gemini Flash TTS -> 2. Gemini Flash-Lite TTS -> 3. External Android System TTS
                 val result = synthesizer.synthesize(request)
 
+                val fallbackNotice = if (result.engineUsed == TtsEngineType.ANDROID_SYSTEM_TTS) {
+                    val reason = synthesizer.diagnostics.value.lastErrorSummary
+                        ?: "ไม่ได้ใช้ Gemini TTS"
+                    "เล่นด้วย Android TTS สำรอง เพราะ Gemini ใช้งานไม่ได้: $reason"
+                } else null
+
                 _uiState.update {
                     it.copy(
                         isSynthesizing = false,
                         isPlaying = true,
+                        noticeMessage = fallbackNotice,
                         lastResult = result,
                         statusMessage = "เล่นเสียงผ่าน ${result.engineUsed.displayName} (${result.latencyMs}ms)" +
                                 if (result.wasCached) " [แคช]" else ""
                     )
                 }
 
-                pcmPlayer.play(result.audioData, result.sampleRate, result.channelCount)
+                pcmPlayer.play(
+                    result.audioData,
+                    result.sampleRate,
+                    result.channelCount,
+                    navigation = currentSettings.navigationMode
+                )
 
                 _uiState.update { it.copy(isPlaying = false) }
             } catch (e: CancellationException) {
+                // Never leave the UI stuck on "synthesizing" if the job is cancelled for any reason
+                _uiState.update { it.copy(isSynthesizing = false, isPlaying = false) }
                 throw e
             } catch (t: Throwable) {
                 Log.e("SiamVoiceViewModel", "Speak error: ${t.message}", t)
@@ -368,6 +514,7 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun stop() {
+        _uiState.update { it.copy(previewingVoice = null) }
         activePlaybackJob?.cancel()
         activePlaybackJob = null
         pcmPlayer.stop()
@@ -393,5 +540,10 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
         super.onCleared()
         stop()
         ttsManager.shutdown()
+    }
+
+    companion object {
+        /** Short Thai sample used by the voice picker's preview buttons. */
+        const val PREVIEW_SAMPLE_TEXT = "สวัสดี นี่คือเสียงตัวอย่าง อีก 200 เมตร เลี้ยวซ้าย"
     }
 }

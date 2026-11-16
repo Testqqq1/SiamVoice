@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -61,7 +62,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.SecureApiKeyStore
+import com.example.engine.NavigationPolicy
 import com.example.model.GeminiModelPreference
+import com.example.model.VoiceStylePreset
 import com.example.ui.theme.EmeraldGreen
 import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.IndigoDark
@@ -89,6 +92,13 @@ fun AdvancedSettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    if (state.showAdultDialog) {
+        AdultContentDialog(
+            onConfirm = { viewModel.confirmAdultContent() },
+            onDismiss = { viewModel.dismissAdultDialog() }
+        )
+    }
 
     BackHandler {
         onNavigateBack()
@@ -376,6 +386,181 @@ fun AdvancedSettingsScreen(
                         value = state.verifiedModelsStatus.flashLiteModelId,
                         valueColor = SkyBlue
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Section: Navigation mode (low latency, navigation audio, pre-cached phrases)
+            SectionHeader(title = "โหมดนำทาง (Navigation Mode)")
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "เปิดโหมดนำทาง",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "ใช้เสียง Navigation ที่ชัดเจนเสมอ (ไม่สนใจสไตล์ 18+/กระซิบ), เสียงชนิดนำทางพร้อมลดเสียงเพลงชั่วคราว, " +
+                                    "ใช้คลิปที่ดาวน์โหลดไว้ก่อน และถ้า Gemini ไม่ทันตามเวลาด้านล่างจะพูดด้วย Android TTS ทันที " +
+                                    "(แอปนำทางที่ส่งสัญญาณเสียงนำทางมา จะเปิดโหมดนี้ให้อัตโนมัติ)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = state.settings.navigationMode,
+                            onCheckedChange = { viewModel.toggleNavigationMode(it) },
+                            modifier = Modifier.testTag("navigation_mode_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = IndigoPrimary
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "เวลารอ Gemini ก่อนสลับไป Android TTS (Latency Budget)",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        NavigationPolicy.LATENCY_BUDGET_OPTIONS_MS.forEach { ms ->
+                            androidx.compose.material3.FilterChip(
+                                selected = state.settings.navigationLatencyBudgetMs == ms,
+                                onClick = { viewModel.selectNavigationLatencyBudget(ms) },
+                                modifier = Modifier.testTag("nav_budget_$ms"),
+                                label = { Text("$ms ms", fontSize = 12.sp) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "เติมคำลงท้าย ครับ/ค่ะ ในโหมดนำทาง (ปิดไว้จะสั้นและเร็วกว่า)",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = state.settings.navigationPoliteEnding,
+                            onCheckedChange = { viewModel.toggleNavigationPoliteEnding(it) },
+                            modifier = Modifier.testTag("navigation_polite_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = IndigoPrimary
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "เสียงนำทางที่เก็บไว้ในเครื่อง: ${state.navDownload.done}/${state.navDownload.total} วลี " +
+                            "(เลี้ยวซ้าย/ขวา, ชิดซ้าย/ขวา, ตรงไป, กลับรถ, วงเวียน, ทางออกที่ 1-8, อีก N เมตร/กม., ถึงจุดหมายแล้ว)",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.testTag("nav_download_progress")
+                    )
+                    if (state.navDownload.message.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = state.navDownload.message,
+                            fontSize = 11.sp,
+                            color = GoldAccent
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.Button(
+                            onClick = { viewModel.downloadNavigationVoices() },
+                            enabled = !state.navDownload.running,
+                            modifier = Modifier.testTag("download_nav_voices_button")
+                        ) {
+                            Text(if (state.navDownload.running) "กำลังดาวน์โหลด..." else "ดาวน์โหลดเสียงนำทาง", fontSize = 13.sp)
+                        }
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = { viewModel.clearNavigationVoices() },
+                            enabled = !state.navDownload.running && state.navDownload.done > 0,
+                            modifier = Modifier.testTag("clear_nav_voices_button")
+                        ) {
+                            Text("ลบเสียงที่ดาวน์โหลด", fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Section: 18+ voice styles (off by default, one-time age confirmation)
+            SectionHeader(title = "สไตล์เสียง 18+ (Adult Voice Styles)")
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "เปิดใช้สไตล์เสียง 18+",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = VoiceStylePreset.adultPresets.joinToString(" • ") { it.presetName } +
+                                    "\nปิดอยู่เป็นค่าเริ่มต้น ต้องยืนยันว่าอายุ 18 ปีขึ้นไป " +
+                                    "และจะปิดคำลงท้าย ครับ/ค่ะ อัตโนมัติในสไตล์เหล่านี้",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = state.settings.adultContentConfirmed,
+                            onCheckedChange = { enabled ->
+                                if (enabled) viewModel.requestAdultContentUnlock() else viewModel.revokeAdultContent()
+                            },
+                            modifier = Modifier.testTag("adult_content_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = IndigoPrimary
+                            )
+                        )
+                    }
                 }
             }
 

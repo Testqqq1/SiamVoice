@@ -3,6 +3,7 @@ package com.example.network
 import android.content.Context
 import android.util.Log
 import com.example.data.SecureApiKeyStore
+import com.example.data.SiamVoicePreferences
 import com.example.engine.AuthFailedException
 import com.example.model.PoliteEndingStyle
 import com.example.model.ThaiAudioPrompt
@@ -51,10 +52,24 @@ open class GeminiPromptService(
         }
     }
 
+    /**
+     * Returns [preset], or the default preset when it is an 18+ style and the user has not confirmed
+     * they are 18 or older (only verifiable when a [Context] is available).
+     */
+    internal fun gatePreset(preset: VoiceStylePreset): VoiceStylePreset {
+        if (!preset.isAdult) return preset
+        val confirmed = context?.let { SiamVoicePreferences(it).getSettings().adultContentConfirmed } ?: false
+        return VoiceStylePreset.gate(preset, confirmed)
+    }
+
     open suspend fun generateThaiAudioPrompt(
         topicOrContext: String,
-        politeStyle: PoliteEndingStyle = PoliteEndingStyle.AUTO_NATURAL
+        politeStyle: PoliteEndingStyle = PoliteEndingStyle.AUTO_NATURAL,
+        voicePreset: VoiceStylePreset = VoiceStylePreset.FRIENDLY_COMPANION
     ): ThaiAudioPrompt = withContext(Dispatchers.IO) {
+        // The response style also drives how the script is written; 18+ styles turn off "ครับ/ค่ะ".
+        val stylePreset = gatePreset(voicePreset)
+        val effectivePolite = stylePreset.resolvePoliteEnding(politeStyle)
         val cleanContext = topicOrContext.trim().ifEmpty {
             "การแจ้งเตือนเส้นทางและการเดินทางด้วยความระมัดระวัง"
         }
@@ -62,18 +77,25 @@ open class GeminiPromptService(
         val prompt = buildString {
             append("สร้างประโยคสคริปต์เสียงพูดภาษาไทยที่เป็นธรรมชาติและคำบรรยายลักษณะเสียง (Audio Description) สำหรับหัวข้อหรือบริบทต่อไปนี้: ")
             append("\"$cleanContext\"\n")
-            append("สไตล์คำลงท้ายที่ต้องการ: ${politeStyle.label} (${politeStyle.description})")
+            append("สไตล์คำลงท้ายที่ต้องการ: ${effectivePolite.label} (${effectivePolite.description})")
+            if (stylePreset.rewriteInstruction.isNotBlank()) {
+                append("\nสไตล์การตอบ/น้ำเสียงของสคริปต์: ${stylePreset.thaiTitle} - ${stylePreset.rewriteInstruction}")
+                append("\nแนะนำให้ audioDescription สอดคล้องกับ: ${stylePreset.stylePrompt}")
+                if (stylePreset.isAdult) {
+                    append("\nเนื้อหาสำหรับผู้ใหญ่อายุ 18 ปีขึ้นไปที่ยินยอมเท่านั้น ห้ามมีเนื้อหาเกี่ยวกับเด็กหรือผู้เยาว์ และห้ามเนื้อหาโจ่งแจ้งผิดกฎหมาย")
+                }
+            }
         }
 
         try {
             withTimeout(25_000L) {
                 try {
-                    requestStructuredPromptViaHttps(prompt, MODEL_FLASH, politeStyle)
+                    requestStructuredPromptViaHttps(prompt, MODEL_FLASH, effectivePolite)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Primary model $MODEL_FLASH failed (${e.message}), trying $MODEL_FLASH_LITE")
-                    requestStructuredPromptViaHttps(prompt, MODEL_FLASH_LITE, politeStyle)
+                    requestStructuredPromptViaHttps(prompt, MODEL_FLASH_LITE, effectivePolite)
                 }
             }
         } catch (e: CancellationException) {
@@ -83,7 +105,8 @@ open class GeminiPromptService(
 
     open suspend fun enhanceTextForSpeech(
         rawText: String,
-        politeStyle: PoliteEndingStyle = PoliteEndingStyle.AUTO_NATURAL
+        politeStyle: PoliteEndingStyle = PoliteEndingStyle.AUTO_NATURAL,
+        voicePreset: VoiceStylePreset = VoiceStylePreset.FRIENDLY_COMPANION
     ): ThaiAudioPrompt = withContext(Dispatchers.IO) {
         val trimmed = rawText.trim()
         if (trimmed.isEmpty()) {
@@ -96,7 +119,7 @@ open class GeminiPromptService(
 สไตล์ความสุภาพ: ${politeStyle.label}
 """.trimIndent()
 
-        generateThaiAudioPrompt(prompt, politeStyle)
+        generateThaiAudioPrompt(prompt, politeStyle, voicePreset)
     }
 
     protected open suspend fun requestStructuredPromptViaHttps(
