@@ -10,6 +10,7 @@ import com.example.audio.DecodedPcmAudio
 import com.example.model.ExternalEngineInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -119,13 +120,30 @@ open class AndroidSystemTtsEngine(private val context: Context) {
         preferredEnginePackage: String? = null,
         speechRate: Float = 1.0f,
         pitch: Float = 1.0f,
-        timeoutMs: Long = 6000L
+        timeoutMs: Long = 20_000L
     ): DecodedPcmAudio = withContext(Dispatchers.IO) {
-        withTimeout(timeoutMs) {
+        try {
+            synthesizeWithinTimeout(text, preferredEnginePackage, speechRate, pitch, timeoutMs)
+        } catch (e: TimeoutCancellationException) {
+            // TimeoutCancellationException is a CancellationException: convert it so callers report an
+            // error instead of silently treating the request as cancelled.
+            throw FallbackSynthesisException(
+                "Android TTS ใช้เวลานานเกินไป (${timeoutMs / 1000} วินาที) - ลองเปิดแอป Speech Services by Google แล้วดาวน์โหลดเสียงภาษาไทย"
+            )
+        }
+    }
+
+    private suspend fun synthesizeWithinTimeout(
+        text: String,
+        preferredEnginePackage: String?,
+        speechRate: Float,
+        pitch: Float,
+        timeoutMs: Long
+    ): DecodedPcmAudio = withTimeout(timeoutMs) {
             val availableEngines = discoverExternalEngines()
             val candidatePackages = orderCandidateExternalEngines(availableEngines, preferredEnginePackage)
             if (candidatePackages.isEmpty()) {
-                throw NoCompatibleEngineException("No external Android TTS engine installed on this device.")
+                throw NoCompatibleEngineException("ไม่พบเอนจินเสียง Android ภายนอกในเครื่อง (ติดตั้ง Speech Services by Google)")
             }
 
             var lastError: Throwable? = null
@@ -157,10 +175,9 @@ open class AndroidSystemTtsEngine(private val context: Context) {
                 is LanguageNotSupportedException -> throw err
                 is NoCompatibleEngineException -> throw err
                 else -> throw FallbackSynthesisException(
-                    err?.message ?: "All external Android TTS engines failed to synthesize Thai speech."
+                    err?.message ?: "เอนจิน Android TTS ทั้งหมดสังเคราะห์เสียงไทยไม่สำเร็จ"
                 )
             }
-        }
     }
 
     protected open suspend fun synthesizeWithEngine(
@@ -209,7 +226,7 @@ open class AndroidSystemTtsEngine(private val context: Context) {
                     if (continuation.isActive) {
                         continuation.resumeWithException(
                             LanguageNotSupportedException(
-                                "Selected engine ($enginePackage) does not support Thai (th-TH)."
+                                "เอนจิน $enginePackage ไม่รองรับภาษาไทย (th-TH) หรือยังไม่ได้ดาวน์โหลดเสียงภาษาไทย"
                             )
                         )
                     }

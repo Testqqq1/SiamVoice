@@ -30,7 +30,7 @@ class PcmPlayer {
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -58,11 +58,34 @@ class PcmPlayer {
                     if (currentTrack != track) return@withContext
                 }
                 val length = (pcmData.size - offset).coerceAtMost(chunkSize)
-                track.write(pcmData, offset, length)
-                offset += length
+                val written = track.write(pcmData, offset, length)
+                if (written < 0) {
+                    synchronized(lock) {
+                        if (currentTrack != track) return@withContext // stopped by the user
+                    }
+                    throw IllegalStateException("AudioTrack.write failed with code $written")
+                }
+                offset += written
             }
+
+            // MODE_STREAM write() returns as soon as the data is buffered. Releasing the track right
+            // away cuts the clip off (silence on short phrases), so wait until it has really played.
+            val bytesPerFrame = 2 * (if (channelCount == 2) 2 else 1)
+            val totalFrames = pcmData.size / bytesPerFrame
+            val durationMs = totalFrames * 1000L / sampleRate
+            val deadline = System.currentTimeMillis() + durationMs + 2000L
+            while (System.currentTimeMillis() < deadline) {
+                synchronized(lock) {
+                    if (currentTrack != track) return@withContext
+                }
+                if (track.playbackHeadPosition >= totalFrames) break
+                kotlinx.coroutines.delay(30)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("PcmPlayer", "Playback error: ${e.message}")
+            throw e
         } finally {
             try {
                 track.stop()

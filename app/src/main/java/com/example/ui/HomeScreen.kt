@@ -434,6 +434,26 @@ fun HomeScreen(
                 LastSynthesisCard(result = result)
             }
 
+            state.noticeMessage?.let { notice ->
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = GoldAccent.copy(alpha = 0.15f)
+                    )
+                ) {
+                    Text(
+                        text = notice,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .testTag("notice_message")
+                    )
+                }
+            }
+
             state.errorMessage?.let { error ->
                 Spacer(modifier = Modifier.height(12.dp))
                 Card(

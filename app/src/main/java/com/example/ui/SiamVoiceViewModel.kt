@@ -20,6 +20,7 @@ import com.example.model.GeminiModelPreference
 import com.example.model.PoliteEndingStyle
 import com.example.model.SynthesisRequestData
 import com.example.model.SynthesisResult
+import com.example.model.TtsEngineType
 import com.example.model.VerifiedModelsStatus
 import com.example.model.VoiceStylePreset
 import com.example.network.GeminiTtsClient
@@ -40,6 +41,8 @@ data class UiState(
     val lastResult: SynthesisResult? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
+    // Non-fatal Thai notice, e.g. Gemini failed and Android TTS was used instead
+    val noticeMessage: String? = null,
     val settings: AppSettings = AppSettings(),
     val diagnostics: DiagnosticsInfo = DiagnosticsInfo(),
     val availableEngines: List<ExternalEngineInfo> = emptyList(),
@@ -352,6 +355,7 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                 it.copy(
                     isSynthesizing = true,
                     errorMessage = null,
+                    noticeMessage = null,
                     statusMessage = "กำลังสังเคราะห์เสียง..."
                 )
             }
@@ -371,10 +375,17 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
                 // 1. Gemini Flash TTS -> 2. Gemini Flash-Lite TTS -> 3. External Android System TTS
                 val result = synthesizer.synthesize(request)
 
+                val fallbackNotice = if (result.engineUsed == TtsEngineType.ANDROID_SYSTEM_TTS) {
+                    val reason = synthesizer.diagnostics.value.lastErrorSummary
+                        ?: "ไม่ได้ใช้ Gemini TTS"
+                    "เล่นด้วย Android TTS สำรอง เพราะ Gemini ใช้งานไม่ได้: $reason"
+                } else null
+
                 _uiState.update {
                     it.copy(
                         isSynthesizing = false,
                         isPlaying = true,
+                        noticeMessage = fallbackNotice,
                         lastResult = result,
                         statusMessage = "เล่นเสียงผ่าน ${result.engineUsed.displayName} (${result.latencyMs}ms)" +
                                 if (result.wasCached) " [แคช]" else ""
@@ -385,6 +396,8 @@ class SiamVoiceViewModel(application: Application) : AndroidViewModel(applicatio
 
                 _uiState.update { it.copy(isPlaying = false) }
             } catch (e: CancellationException) {
+                // Never leave the UI stuck on "synthesizing" if the job is cancelled for any reason
+                _uiState.update { it.copy(isSynthesizing = false, isPlaying = false) }
                 throw e
             } catch (t: Throwable) {
                 Log.e("SiamVoiceViewModel", "Speak error: ${t.message}", t)

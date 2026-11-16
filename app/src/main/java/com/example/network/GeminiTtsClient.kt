@@ -229,7 +229,18 @@ class GeminiTtsClient(
          */
         fun isSupportedTtsModel(modelId: String): Boolean {
             val cleanModelId = modelId.removePrefix("models/").trim()
-            return cleanModelId in SUPPORTED_TTS_MODELS
+            return cleanModelId in SUPPORTED_TTS_MODELS ||
+                (cleanModelId.startsWith("gemini-") && cleanModelId.contains("tts", ignoreCase = true))
+        }
+
+        /**
+         * Gemini 3.x TTS models treat `text` as a verbatim transcript and take delivery directions in
+         * `speechMetadata.style`; instructions embedded in the text may be read aloud.
+         * Older preview models (2.5 / 3.1-preview) expect the directions inline in the prompt text.
+         */
+        fun usesSpeechMetadataStyle(modelId: String?): Boolean {
+            val id = modelId?.removePrefix("models/")?.trim().orEmpty()
+            return Regex("^gemini-3\\.([2-9]|[1-9][0-9])-.*tts").containsMatchIn(id)
         }
 
         /**
@@ -293,14 +304,20 @@ class GeminiTtsClient(
         fun buildGenerateContentRequestJson(
             text: String,
             voiceName: String = VoiceStylePreset.FRIENDLY_COMPANION.voiceName,
-            stylePrompt: String = VoiceStylePreset.FRIENDLY_COMPANION.stylePrompt
+            stylePrompt: String = VoiceStylePreset.FRIENDLY_COMPANION.stylePrompt,
+            modelId: String? = null
         ): JSONObject {
             val resolvedVoice = if (voiceName in SUPPORTED_VOICES) {
                 voiceName
             } else {
                 VoiceStylePreset.fromVoiceOrName(voiceName).voiceName
             }
-            val styledPrompt = buildStyledSpeechPrompt(text = text, stylePrompt = stylePrompt)
+            val useMetadataStyle = usesSpeechMetadataStyle(modelId)
+            val styledPrompt = if (useMetadataStyle) {
+                text.trim()
+            } else {
+                buildStyledSpeechPrompt(text = text, stylePrompt = stylePrompt)
+            }
 
             return JSONObject().apply {
                 put(
@@ -313,6 +330,12 @@ class GeminiTtsClient(
                                 JSONArray().put(
                                     JSONObject().apply {
                                         put("text", styledPrompt)
+                                        if (useMetadataStyle) {
+                                            val style = VoiceStylePreset.geminiStyleFor(stylePrompt)
+                                            if (style.isNotBlank()) {
+                                                put("speechMetadata", JSONObject().put("style", style))
+                                            }
+                                        }
                                     }
                                 )
                             )
@@ -430,7 +453,8 @@ class GeminiTtsClient(
         val requestJson = buildGenerateContentRequestJson(
             text = text,
             voiceName = voiceName,
-            stylePrompt = stylePrompt
+            stylePrompt = stylePrompt,
+            modelId = cleanModelId
         )
 
         if (!validateAudioRequestSchema(requestJson)) {
@@ -459,6 +483,11 @@ class GeminiTtsClient(
 
         val errorDetail = extractErrorMessage(rawBody).ifEmpty { "HTTP $code" }
         Log.w(TAG, "Gemini TTS ($cleanModelId) HTTP $code: $errorDetail")
+
+        // Gemini answers an invalid key with HTTP 400 ("API key not valid"), not 401
+        if (code == 400 && errorDetail.contains("API key", ignoreCase = true)) {
+            throw AuthFailedException("Gemini API Key ไม่ถูกต้อง (400): $errorDetail")
+        }
 
         when (code) {
             429 -> throw QuotaExhaustedException("โควตา Gemini API เต็ม (429): $errorDetail")

@@ -239,6 +239,7 @@ class SiamVoiceValidationTest {
     fun `Scenario 4 - Real Thai speech generation using Puck Friendly Companion and Orus Calm Personal Assistant`() = runBlocking {
         val capturedVoiceNames = mutableListOf<String>()
         val capturedPromptTexts = mutableListOf<String>()
+        val capturedStyles = mutableListOf<String>()
         val (expectedPcm, fakeJsonResponse) = buildGeminiAudioJsonResponse(sampleRate = 24000, numSamples = 1200)
 
         val transport = GeminiTtsTransport { _, _, requestJson ->
@@ -253,6 +254,10 @@ class SiamVoiceValidationTest {
                 .getJSONObject("prebuiltVoiceConfig")
                 .getString("voiceName")
             capturedPromptTexts.add(promptText)
+            capturedStyles.add(
+                requestJson.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(0)
+                    .optJSONObject("speechMetadata")?.optString("style").orEmpty()
+            )
             capturedVoiceNames.add(voiceName)
             GeminiHttpResponse(statusCode = 200, body = fakeJsonResponse)
         }
@@ -269,7 +274,9 @@ class SiamVoiceValidationTest {
         assertArrayEquals(expectedPcm, puckDecoded.pcmData)
         assertEquals(24000, puckDecoded.sampleRate)
         assertEquals("Puck", capturedVoiceNames[0])
-        assertTrue(capturedPromptTexts[0].contains("พูดด้วยน้ำเสียงอารมณ์ดี กระตือรือร้น เป็นธรรมชาติ เหมือนเพื่อนสนิทนั่งข้างคนขับ"))
+        // Gemini 3.8: transcript is verbatim, style travels in speechMetadata.style
+        assertEquals("อีก 300 เมตร เลี้ยวซ้ายนะครับ", capturedPromptTexts[0])
+        assertEquals(VoiceStylePreset.FRIENDLY_COMPANION.geminiStyle, capturedStyles[0])
 
         // 2. Orus (Calm Personal Assistant)
         val orusDecoded = client.synthesize(
@@ -280,7 +287,8 @@ class SiamVoiceValidationTest {
         )
         assertArrayEquals(expectedPcm, orusDecoded.pcmData)
         assertEquals("Orus", capturedVoiceNames[1])
-        assertTrue(capturedPromptTexts[1].contains("พูดด้วยน้ำเสียงนุ่มทุ้ม สุภาพ ใจเย็น อบอุ่น เหมือนเลขาส่วนตัว"))
+        assertEquals("ถึงจุดหมายแล้วครับผม", capturedPromptTexts[1])
+        assertEquals(VoiceStylePreset.PERSONAL_ASSISTANT.geminiStyle, capturedStyles[1])
     }
 
     @Test
@@ -386,7 +394,7 @@ class SiamVoiceValidationTest {
     }
 
     @Test
-    fun `Scenario 7 - Shared synthesis pipeline executes Flash then Flash-Lite then External Android TTS on cloud errors`() = runBlocking {
+    fun `Scenario 7 - Shared synthesis pipeline executes Flash then Flash-Lite then Gemini 2_5 then External Android TTS on cloud errors`() = runBlocking {
         val executionOrder = mutableListOf<String>()
         val (fallbackPcm, _) = buildGeminiAudioJsonResponse(sampleRate = 22050, numSamples = 800)
 
@@ -440,6 +448,7 @@ class SiamVoiceValidationTest {
             listOf(
                 "GEMINI:gemini-3.8-flash-tts",
                 "GEMINI:gemini-3.8-flash-lite-tts",
+                "GEMINI:gemini-2.5-flash-preview-tts", // safety-net stage for accounts without 3.8 access
                 "ANDROID_FALLBACK:อีก 300 เมตร เลี้ยวซ้ายนะครับ"
             ),
             executionOrder

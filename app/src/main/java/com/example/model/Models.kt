@@ -86,7 +86,9 @@ enum class VoiceStylePreset(
     val speechRateHint: Float = 1.0f,
     val pitchHint: Float = 1.0f,
     val isAdult: Boolean = false,
-    val politeEndingOverride: PoliteEndingStyle? = null
+    val politeEndingOverride: PoliteEndingStyle? = null,
+    /** Short English delivery direction, sent as `speechMetadata.style` to Gemini 3.x TTS models. */
+    val geminiStyle: String = ""
 ) {
     FRIENDLY_COMPANION(
         presetName = "Friendly Companion",
@@ -94,6 +96,7 @@ enum class VoiceStylePreset(
         voiceName = "Puck",
         stylePrompt = "พูดด้วยน้ำเสียงอารมณ์ดี กระตือรือร้น เป็นธรรมชาติ เหมือนเพื่อนสนิทนั่งข้างคนขับ",
         thaiDescription = "เพื่อนสนิทอารมณ์ดี (ค่าเริ่มต้น)",
+        geminiStyle = "cheerful, friendly and upbeat, like a close friend sitting next to the driver",
         rewriteInstruction = "เขียนด้วยน้ำเสียงเป็นกันเอง อารมณ์ดี สุภาพ เหมือนเพื่อนสนิท"
     ),
     PERSONAL_ASSISTANT(
@@ -102,6 +105,7 @@ enum class VoiceStylePreset(
         voiceName = "Orus",
         stylePrompt = "พูดด้วยน้ำเสียงนุ่มทุ้ม สุภาพ ใจเย็น อบอุ่น เหมือนเลขาส่วนตัว",
         thaiDescription = "สุภาพ ใจเย็น เหมือนเลขาส่วนตัว",
+        geminiStyle = "calm, polite, warm and composed, like a personal secretary",
         rewriteInstruction = "เขียนด้วยน้ำเสียงสุภาพ สุขุม ใจเย็น กระชับ"
     ),
     ROMANTIC(
@@ -112,6 +116,7 @@ enum class VoiceStylePreset(
             "like whispering sweet words to a loved one over dinner. " +
             "พูดด้วยน้ำเสียงอบอุ่น หวานละมุน นุ่มนวล จังหวะช้าลงเล็กน้อย เหมือนกระซิบคำหวานกับคนที่รัก",
         thaiDescription = "หวาน อบอุ่น นุ่มนวล (ทุกวัย)",
+        geminiStyle = "warm, tender and romantic, soft, smooth and slightly slower",
         rewriteInstruction = "เขียนด้วยน้ำเสียงโรแมนติก หวาน อบอุ่น สุภาพ ไม่หยาบคาย",
         speechRateHint = 0.9f
     ),
@@ -123,6 +128,7 @@ enum class VoiceStylePreset(
             "and rising suspense at the key moments. " +
             "พูดแบบนักเล่าเรื่อง อบอุ่น มีอารมณ์ ใส่จังหวะหยุดเว้นวรรคให้ลุ้นตามจังหวะสำคัญ",
         thaiDescription = "เล่าเรื่องมีจังหวะ ลุ้นระทึก",
+        geminiStyle = "expressive storyteller, warm, with dramatic pauses and rising suspense",
         rewriteInstruction = "เขียนแบบนักเล่าเรื่อง มีจังหวะ เว้นวรรค และสร้างบรรยากาศ",
         speechRateHint = 0.95f
     ),
@@ -134,6 +140,7 @@ enum class VoiceStylePreset(
             "Look over your shoulder, drop your voice at the punchlines, playful and over-the-top. " +
             "พูดกระซิบแบบลับๆ ล่อๆ หวาดระแวงอย่างตลก เหมือนเล่าความลับระดับโลก",
         thaiDescription = "กระซิบลับๆ ตลกๆ เล่นใหญ่",
+        geminiStyle = "hushed, paranoid conspiratorial whisper, playful and over-the-top",
         rewriteInstruction = "เขียนแบบเล่าความลับสุดแสบ ขำๆ เว่อร์ๆ (เพื่อความบันเทิงเท่านั้น ไม่อ้างข้อมูลจริงที่เป็นเท็จ)",
         speechRateHint = 0.95f
     ),
@@ -145,6 +152,7 @@ enum class VoiceStylePreset(
             "expressive, laughing and shouting at the right moments, delivering every word with attitude. " +
             "พูดแบบกวนๆ ปากจัด พลังงานสูง ประชดประชัน เล่นใหญ่ มีหัวเราะและตะโกนในจังหวะที่ใช่",
         thaiDescription = "กวน ปากจัด ประชด พลังงานเต็ม (เฉพาะผู้ใหญ่)",
+        geminiStyle = "unhinged, chaotic and high-energy, sarcastic and cheeky, full of attitude",
         rewriteInstruction = "เขียนแบบกวนๆ ปากจัด ประชดประชัน อนุญาตให้ใช้คำสบถหรือคำหยาบเบาๆ ได้ " +
             "ห้ามเหยียดหรือด่าทอกลุ่มคนหรือบุคคลจริง ห้ามมีเนื้อหาเกี่ยวกับเด็กหรือผู้เยาว์",
         speechRateHint = 1.1f,
@@ -160,6 +168,7 @@ enum class VoiceStylePreset(
             "a seductive whisper close to the microphone, with soft sighs and playful pauses. " +
             "พูดด้วยน้ำเสียงกระซิบแผ่วๆ ทุ้มต่ำ จังหวะช้า ยั่วเย้าเป็นผู้ใหญ่ มีเสียงลมหายใจและเว้นจังหวะอย่างเย้ายวน",
         thaiDescription = "กระซิบแผ่ว ทุ้ม ช้า เย้ายวน (เฉพาะผู้ใหญ่)",
+        geminiStyle = "sultry, breathy, slow and intimate low whisper",
         rewriteInstruction = "เขียนแบบเย้ายวน กระซิบ ชวนจินตนาการ สำหรับผู้ใหญ่ที่ยินยอมเท่านั้น " +
             "ใช้ภาษาเชิงเย้าแหย่ ไม่โจ่งแจ้งหรือลามกอนาจาร ห้ามมีเนื้อหาเกี่ยวกับเด็กหรือผู้เยาว์",
         speechRateHint = 0.85f,
@@ -185,6 +194,17 @@ enum class VoiceStylePreset(
          */
         fun gate(preset: VoiceStylePreset, adultConfirmed: Boolean): VoiceStylePreset =
             if (preset.isAdult && !adultConfirmed) FRIENDLY_COMPANION else preset
+
+        /**
+         * Short English style direction for Gemini 3.x TTS (`speechMetadata.style`). Resolves a preset from
+         * its [stylePrompt] and falls back to a truncated copy of the given prompt for custom prompts.
+         */
+        fun geminiStyleFor(stylePrompt: String): String {
+            val trimmed = stylePrompt.trim()
+            entries.firstOrNull { it.stylePrompt == trimmed }?.geminiStyle?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+            return trimmed.take(200)
+        }
 
         fun fromVoiceOrName(value: String?): VoiceStylePreset {
             val v = value?.trim()

@@ -261,4 +261,51 @@ class VoiceStylePresetTest {
             cache.get("m", "Puck", "สวัสดี", stylePrompt = "p", voiceStyle = VoiceStylePreset.SEXY.name)
         )
     }
+
+    // --- Gemini request format -------------------------------------------------------------------
+
+    @Test
+    fun `gemini 3_8 requests keep the transcript verbatim and send the style as speechMetadata`() {
+        listOf(GeminiTtsClient.MODEL_FLASH, GeminiTtsClient.MODEL_FLASH_LITE).forEach { model ->
+            VoiceStylePreset.entries.forEach { preset ->
+                val json = GeminiTtsClient.buildGenerateContentRequestJson(
+                    text = " สวัสดีครับ ",
+                    voiceName = preset.voiceName,
+                    stylePrompt = preset.stylePrompt,
+                    modelId = model
+                )
+                assertTrue(GeminiTtsClient.validateAudioRequestSchema(json))
+                val part = json.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(0)
+                assertEquals("สวัสดีครับ", part.getString("text"))
+                assertEquals(preset.geminiStyle, part.getJSONObject("speechMetadata").getString("style"))
+                assertTrue(preset.geminiStyle.isNotBlank())
+            }
+        }
+    }
+
+    @Test
+    fun `legacy gemini models embed the style inline`() {
+        val json = GeminiTtsClient.buildGenerateContentRequestJson(
+            text = "สวัสดี",
+            voiceName = "Puck",
+            stylePrompt = VoiceStylePreset.SEXY.stylePrompt,
+            modelId = GeminiTtsClient.MODEL_GEMINI_2_5_FLASH_TTS
+        )
+        val part = json.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(0)
+        assertTrue(part.getString("text").contains(VoiceStylePreset.SEXY.stylePrompt))
+        assertFalse(part.has("speechMetadata"))
+        assertFalse(GeminiTtsClient.usesSpeechMetadataStyle(GeminiTtsClient.MODEL_GEMINI_3_1_FLASH_TTS_PREVIEW))
+        assertTrue(GeminiTtsClient.usesSpeechMetadataStyle("gemini-3.8-flash-lite-tts"))
+    }
+
+    @Test
+    fun `all preset voices are official Gemini prebuilt voices`() {
+        val official = setOf(
+            "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
+            "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
+            "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
+            "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+        )
+        VoiceStylePreset.entries.forEach { assertTrue(it.voiceName, it.voiceName in official) }
+    }
 }

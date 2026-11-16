@@ -36,6 +36,8 @@ open class SiamVoiceTtsSynthesizer(
 
     val flashCircuitBreaker = CircuitBreaker("GeminiFlashTTS", failureThreshold = 2)
     val flashLiteCircuitBreaker = CircuitBreaker("GeminiFlashLiteTTS", failureThreshold = 2)
+    // Extra safety net: the long-available Gemini 2.5 TTS model (inline style prompt format)
+    val legacyCircuitBreaker = CircuitBreaker("GeminiLegacyTTS", failureThreshold = 2)
 
     private val _diagnostics = MutableStateFlow(
         DiagnosticsInfo(
@@ -54,6 +56,7 @@ open class SiamVoiceTtsSynthesizer(
     }
 
     fun resetCircuitBreakers() {
+        legacyCircuitBreaker.reset()
         flashCircuitBreaker.reset()
         flashLiteCircuitBreaker.reset()
         refreshDiagnosticsState()
@@ -153,7 +156,7 @@ open class SiamVoiceTtsSynthesizer(
             val breaker: CircuitBreaker
         )
 
-        val orderedCloudStages = when (settings.modelPreference) {
+        val primaryStages = when (settings.modelPreference) {
             GeminiModelPreference.FLASH_PRIMARY -> listOf(
                 CloudStage(flashModelId, TtsEngineType.GEMINI_FLASH, flashCircuitBreaker),
                 CloudStage(flashLiteModelId, TtsEngineType.GEMINI_FLASH_LITE, flashLiteCircuitBreaker)
@@ -164,7 +167,19 @@ open class SiamVoiceTtsSynthesizer(
             )
         }
 
-        // 3 & 4. Execute ordered Gemini Cloud TTS stages (Flash -> Flash-Lite)
+        // Add the Gemini 2.5 TTS model as a last cloud stage when it is not already configured,
+        // so an account without access to the 3.8 models still gets Gemini voices.
+        val orderedCloudStages = if (primaryStages.none { it.modelId == GeminiTtsClient.MODEL_GEMINI_2_5_FLASH_TTS }) {
+            primaryStages + CloudStage(
+                GeminiTtsClient.MODEL_GEMINI_2_5_FLASH_TTS,
+                TtsEngineType.GEMINI_FLASH_LITE,
+                legacyCircuitBreaker
+            )
+        } else {
+            primaryStages
+        }
+
+        // 3 & 4. Execute ordered Gemini Cloud TTS stages (Flash -> Flash-Lite -> 2.5 safety net)
         for (stage in orderedCloudStages) {
             if (online && stage.breaker.canExecute()) {
                 try {
@@ -259,7 +274,7 @@ open class SiamVoiceTtsSynthesizer(
                     lastError = cloudReason
                 )
                 throw FallbackSynthesisException(
-                    "ไม่สามารถสังเคราะห์เสียงได้ (Gemini: $cloudReason | Android TTS: ${t.message})"
+                    "ไม่สามารถสังเคราะห์เสียงได้ (Gemini: $cloudReason | Android TTS: ${t.message ?: t.javaClass.simpleName})"
                 )
             }
         } else {
