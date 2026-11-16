@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SiamVoice</string>
+    <string name="tts_service_label">SiamVoice Thai TTS</string>
+    <string name="tts_settings_label">SiamVoice Settings</string>
+</resources>

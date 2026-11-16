@@ -1,0 +1,92 @@
+package com.example.audio
+
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+class PcmPlayer {
+    private var currentTrack: AudioTrack? = null
+    private val lock = Any()
+
+    suspend fun play(pcmData: ByteArray, sampleRate: Int = 24000, channelCount: Int = 1) = withContext(Dispatchers.IO) {
+        stop()
+        if (pcmData.isEmpty()) return@withContext
+
+        val channelConfig = if (channelCount == 2) {
+            AudioFormat.CHANNEL_OUT_STEREO
+        } else {
+            AudioFormat.CHANNEL_OUT_MONO
+        }
+
+        val bufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            channelConfig,
+            AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(pcmData.size)
+
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(channelConfig)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        synchronized(lock) {
+            currentTrack = track
+        }
+
+        try {
+            track.play()
+            var offset = 0
+            val chunkSize = 4096
+            while (offset < pcmData.size) {
+                synchronized(lock) {
+                    if (currentTrack != track) return@withContext
+                }
+                val length = (pcmData.size - offset).coerceAtMost(chunkSize)
+                track.write(pcmData, offset, length)
+                offset += length
+            }
+        } catch (e: Exception) {
+            Log.e("PcmPlayer", "Playback error: ${e.message}")
+        } finally {
+            try {
+                track.stop()
+                track.release()
+            } catch (ignored: Exception) {}
+            synchronized(lock) {
+                if (currentTrack == track) {
+                    currentTrack = null
+                }
+            }
+        }
+    }
+
+    fun stop() {
+        synchronized(lock) {
+            try {
+                currentTrack?.pause()
+                currentTrack?.flush()
+                currentTrack?.stop()
+                currentTrack?.release()
+            } catch (e: Exception) {
+                Log.w("PcmPlayer", "Error stopping track: ${e.message}")
+            }
+            currentTrack = null
+        }
+    }
+}

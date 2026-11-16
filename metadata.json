@@ -1,0 +1,6 @@
+{
+  "name": "SiamVoice TTS",
+  "description": "High-fidelity Thai Text-to-Speech app with automatic Gemini cloud synthesis and Android System TTS fallback.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
